@@ -1,0 +1,28 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Compile RoboFimathe (Executa deploy.sh)",
+      "type": "shell",
+      // O comando a ser executado é o script.
+      // O "./" garante que ele rode a partir da raiz do workspace do VS Code.
+      "command": "./deploy.sh",
+
+      // Não precisamos de argumentos, a não ser que o script exija.
+      "args": [],
+
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      },
+      "problemMatcher": [],
+      "detail": "Executa o script deploy.sh na raiz do projeto para sincronizar e compilar MQL."
+    }
+  ]
+}

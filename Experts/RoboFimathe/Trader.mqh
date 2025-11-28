@@ -24,21 +24,26 @@ public:
       m_trade.SetMarginMode(); // Usa o modo de margem padrão da conta
    }
 
-   bool OpenBuy(string symbol, double volume)
+   bool OpenBuy(string symbol, double volume, double sl, double tp)
    {
-      // Implementar lógica para abrir ordem de compra
-      return m_trade.Buy(volume, symbol);
+      return m_trade.Buy(volume, symbol, 0, sl, tp);
    }
 
-   bool OpenSell(string symbol, double volume)
+   bool OpenSell(string symbol, double volume, double sl, double tp)
    {
-      // Implementar lógica para abrir ordem de venda
-      return m_trade.Sell(volume, symbol);
+      return m_trade.Sell(volume, symbol, 0, sl, tp);
    }
 
-   bool HasOpenTrade(ulong magic_number) const
-   {
-      // Implementar lógica para verificar se há ordens abertas com o magic_number
-      return false;
-   }
+   int OpenTradesCount()
+    {
+        int count = 0;
+        for (int i = PositionsTotal() - 1; i >= 0; i--)
+        {
+            if (PositionGetInteger(POSITION_MAGIC) == m_magic_number)
+            {
+                count++;
+            }
+        }
+        return count;
+    }
 };
