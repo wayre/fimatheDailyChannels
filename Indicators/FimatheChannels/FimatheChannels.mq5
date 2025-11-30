@@ -11,7 +11,7 @@
 #property indicator_plots 0
 
 //--- Input para o número de níveis de canais
-input int InpChannelLevels = 7;
+input int InpChannelLevels = 10;
 input color InpBaseChannelColor = C'63, 46, 139'; // Cor do Canal Base
 input color InpUpperLevelsColor = C'76, 76, 158';  // Cor dos Níveis Superiores
 input color InpLowerLevelsColor = C'76, 76, 158';    // Cor dos Níveis Inferiores
@@ -151,7 +151,6 @@ bool CalculateAndDrawLevels()
 
     if (copied < 4)
     {
-        Print("FimatheChannels: Erro ao copiar as 4 velas da sessão. Velas copiadas: ", copied, ". Esperado: 4. De: ", (string)first_bar_open_time, " Até: ", (string)fourth_bar_close_time);
         return false;
     }
 
@@ -172,8 +171,6 @@ bool CalculateAndDrawLevels()
     // Normaliza o range para pontos para a verificação dos 1000 pontos
     double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
 
-    commentRobot = "TAMANHO DO CANAL: " + DoubleToString(StringToDouble(DoubleToString(range_canal,2))*100,0);
-
     // Se o range for maior ou igual a 1000 pontos, divide pela metade.
     isBigChannel = point > 0 && range_canal / point >= 1000;
     if (isBigChannel)
@@ -181,20 +178,14 @@ bool CalculateAndDrawLevels()
         range_canal /= 2;
         max_high = min_low + range_canal;
     }
-
-    // --- Apaga as linhas antigas antes de desenhar as novas ---
-    ObjectsDeleteAll(0, g_object_prefix);
+    
+    commentRobot = "TAMANHO DO CANAL: " + DoubleToString(StringToDouble(DoubleToString(range_canal,2))*100,0);
 
     // --- Desenha as novas linhas ---
     // Canal Base
     DrawHorizontalLine(g_object_prefix + "Superior_("+commentRobot+"pts_)", max_high, "Canal Superior", InpBaseChannelColor, STYLE_DASH, 2);
     DrawHorizontalLine(g_object_prefix + "Inferior_("+commentRobot+"pts_)", min_low, "Canal Inferior", InpBaseChannelColor, STYLE_DASH, 2);
     
-    // if(isBigChannel)
-    // {
-    //     DrawHorizontalLine(g_object_prefix + "Central", min_low+range_canal, "Canal Central", InpBaseChannelColor, STYLE_DASH, 1);
-    // }
-
     // Níveis Superiores
     for (int i = 1; i <= InpChannelLevels; i++)
     {
@@ -212,7 +203,6 @@ bool CalculateAndDrawLevels()
     }
 
     ChartRedraw();
-    Print("FimatheChannels: Níveis calculados e desenhados para o dia de hoje.");
     return true; // Sucesso
 }
 
@@ -238,10 +228,13 @@ int OnCalculate(const int rates_total,
     dt.sec = 0;
     datetime today_start = StructToTime(dt);
 
-    //--- Se os níveis para o dia de hoje ainda não foram calculados, tenta calcular.
+    //--- Se for um novo dia, limpa os canais antigos e tenta calcular os novos.
     if (g_calculated_for_day != today_start)
     {
-        // Se o cálculo for bem-sucedido, atualiza a data do cálculo.
+        // É um novo dia, então removemos os objetos antigos.
+        ObjectsDeleteAll(0, g_object_prefix);
+
+        // Se o cálculo dos novos níveis for bem-sucedido, atualiza a data.
         if (CalculateAndDrawLevels())
         {
             g_calculated_for_day = today_start;
