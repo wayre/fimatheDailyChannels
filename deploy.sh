@@ -3,7 +3,7 @@
 # Este script sincroniza os arquivos do projeto RoboFimathe
 # (Experts e Indicadores) para a pasta de instalação do MT5/Wine.
 
-clear;
+# clear;
 # --- Variáveis ---
 # Base do seu projeto
 SOURCE_BASE="/www/mql/fimathe/MQL5"
@@ -23,15 +23,15 @@ mkdir -p "${EXPERT_DEST}"
 cp -r "${EXPERT_SOURCE}/"* "${EXPERT_DEST}/"
 
 # --- 2. Sincronização dos Indicadores (FimatheLevels) ---
-echo "▶️ Sincronizando Indicators/FimatheLevels..."
-INDICATOR_SOURCE="${SOURCE_BASE}/Indicators/FimatheLevels"
-INDICATOR_DEST="${DEST_BASE}/Indicators/FimatheLevels"
+echo "▶️ Sincronizando Indicators/FimatheChannels..."
+INDICATOR_SOURCE="${SOURCE_BASE}/Indicators/FimatheChannels"
+INDICATOR_DEST="${DEST_BASE}/Indicators/FimatheChannels"
 
 # Cria o diretório de destino
 mkdir -p "${INDICATOR_DEST}"
 
 # Copia todos os arquivos e pastas da origem para o destino
-cp -r "${INDICATOR_SOURCE}/"* "${INDICATOR_DEST}/"
+cp -rv "${INDICATOR_SOURCE}/"* "${INDICATOR_DEST}/"
 
 # --- Fim ---
 echo "✅ Sincronização concluída! Arquivos prontos para compilação."

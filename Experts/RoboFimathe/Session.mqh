@@ -72,11 +72,6 @@ public:
       return false;
    }
 
-   bool IsTradingDay()
-   {
-      return ::IsTradingDay();
-   }
-
    bool IsTradingHours()
    {
       return ::IsTradingHours();
@@ -87,7 +82,7 @@ public:
       MqlDateTime hoje;
       TimeToStruct(TimeCurrent(), hoje);
 
-      if (hoje.day_of_week == SUNDAY)
+      if (hoje.day_of_week == MONDAY)
       {
          return PERIOD_M15;
       }

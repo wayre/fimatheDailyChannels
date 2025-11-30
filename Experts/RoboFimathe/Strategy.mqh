@@ -19,6 +19,8 @@ private:
    double m_canal_superior;
    double m_canal_inferior;
    bool m_levels_calculated_today;
+   double maximumBullPriceValue;
+   double maximumBearPriceValue;
 
 public:
    /**
@@ -116,32 +118,47 @@ public:
       m_canal_inferior = min_low;
       m_levels_calculated_today = true; // Marca como calculado para o dia de hoje.
 
+      // --- Calcula os limites de entrada junto com os níveis do canal ---
+      maximumBullPriceValue = m_canal_superior + m_range_canal + (m_range_canal * 0.2);
+      maximumBearPriceValue = m_canal_inferior - m_range_canal - (m_range_canal * 0.2);
+
       Print("Níveis do Canal Calculados (4 primeiras velas): Superior=", m_canal_superior, ", Inferior=", m_canal_inferior, ", Range=", m_range_canal);
    }
 
+   // retorna o valor limite permitido para a operacao de venda
+   double getMaximumValueEntrytoSell() 
+   {
+      return maximumBearPriceValue;
+   }
+   
+   // retorna o valor limite permitido para a operacao de compra
+   double getMaximumValueEntrytoBuy() 
+   {
+      return maximumBullPriceValue;
+   }
+   
    /**
     * Verifica se existe um sinal de compra. A regra é: o preço de fechamento do candle anterior
     * é maior que o topo do canal (m_canal_superior) somado a uma vez a altura do canal (m_range_canal).
     */
-   bool CheckBuySignal(double current_close_price) const
+   bool CheckBuySignal(double last_close_price) const
    {
       if (!m_levels_calculated_today)
          return false;
 
-      // A regra foi alterada para usar 1x o range do canal, conforme solicitado.
-      return current_close_price > m_canal_superior + m_range_canal;
+      return last_close_price > m_canal_superior + m_range_canal;
    }
 
    /**
     * Verifica se existe um sinal de venda. A regra é: o preço de fechamento do candle anterior
     * é menor que o fundo do canal (m_canal_inferior) subtraindo uma vez a altura do canal (m_range_canal).
     */
-   bool CheckSellSignal(double current_close_price) const
+   bool CheckSellSignal(double last_close_price) const
    {
       if (!m_levels_calculated_today)
          return false;
 
-      return current_close_price < m_canal_inferior - (1 * m_range_canal);
+      return last_close_price < m_canal_inferior - m_range_canal;
    }
 
    /**

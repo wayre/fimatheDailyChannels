@@ -1,12 +1,12 @@
 {
-  "C_Cpp.default.includePath": [
-    "${workspaceFolder}/**",
-    "${workspaceFolder}/Include"
-  ],
-  "C_Cpp.default.compilerPath": "",
-  "C_Cpp.default.intelliSenseMode": "gcc-x64",
-  "C_Cpp.errorSquiggles": "disabled",
-  "C_Cpp.autocompleteAddParentheses": true,
+  "mqlens.validation.enabled": false,
+  "mqlens.formatting.enabled": false,
+  "mqlens.intellisense.enabled": true,
+  "mqlens.hover.enabled": true,
+  "mqlens.completion.enabled": true,
+  "mqlens.diagnostics.maxProblems": 50,
+  "mqlens.formatting.indentSize": 3,
+  "mqlens.formatting.insertSpaces": true,
   "files.exclude": {
     "**/*.ex4": true,
     "**/*.ex5": true,
@@ -20,11 +20,6 @@
     "**/*_@!@.mq4": true,
     "**/*_@!@.mq5": true,
     "**/*_@!@.mqh": true
-  },
-  "files.associations": {
-    "*.mqh": "cpp",
-    "*.mq4": "cpp",
-    "*.mq5": "cpp"
   },
   "editor.tabSize": 3,
   "C_Cpp.default.forcedInclude": [
