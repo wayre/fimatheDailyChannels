@@ -59,7 +59,7 @@ int OnInit()
     g_drawn_days.Clear();
 
     // Inicializa o ZigZag com os parâmetros 12, 5, 3
-    g_zigzag_handle = iCustom(_Symbol, _Period, "Examples\\ZigZag", 12, 5, 3);
+    g_zigzag_handle = iCustom(_Symbol, _Period, "Examples\\ZigZag", 6, 5, 4);
     if (g_zigzag_handle == INVALID_HANDLE)
     {
         Print("Erro ao criar handle do ZigZag");
@@ -148,7 +148,7 @@ bool GetSessionTimesForDay(const string symbol, const datetime for_day, datetime
 //+------------------------------------------------------------------+
 FiboData CalculateFiboDataForDay(const datetime for_day)
 {
-    Print("CalculateFiboDataForDay: Iniciando cálculo para o dia ", TimeToString(for_day, TIME_DATE));
+    // Print("CalculateFiboDataForDay: Iniciando cálculo para o dia ", TimeToString(for_day, TIME_DATE));
     FiboData result = {0};
     result.is_valid = false;
 
@@ -165,7 +165,7 @@ FiboData CalculateFiboDataForDay(const datetime for_day)
     MqlDateTime dt_temp;
     TimeToStruct(for_day, dt_temp);
     ENUM_TIMEFRAMES timeframe = (dt_temp.day_of_week == MONDAY) ? PERIOD_M15 : PERIOD_M5;
-    Print("CalculateFiboDataForDay: Timeframe definido para ", EnumToString(timeframe));
+    // Print("CalculateFiboDataForDay: Timeframe definido para ", EnumToString(timeframe));
 
     int bar_shift = iBarShift(symbol, timeframe, session_start, false);
     if(bar_shift < 0)
@@ -185,7 +185,6 @@ FiboData CalculateFiboDataForDay(const datetime for_day)
         Print("CalculateFiboDataForDay: Falha ao copiar rates. Esperado: 4, Copiado: ", copied);
         return result;
     }
-    Print("CalculateFiboDataForDay: ", copied, " rates copiados com sucesso.");
 
     double max_high = 0;
     double min_low = 999999999;
@@ -377,7 +376,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
             dt.hour = 0; dt.min = 0; dt.sec = 0;
             datetime clicked_day = StructToTime(dt);
 
-            Print("Shift+Click para o dia: ", TimeToString(clicked_day, TIME_DATE));
+            // Print("Shift+Click para o dia: ", TimeToString(clicked_day, TIME_DATE));
 
             // Limpa objetos antigos e desenha o novo
             ObjectsDeleteAll(0, g_object_prefix);
@@ -420,7 +419,8 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
                 // int day_index = iBarShift(_Symbol, PERIOD_D1, clicked_day);
                 // datetime previous_day = iTime(_Symbol, PERIOD_D1, day_index + 1);
 
-                pivot = GetZigZagPivot(clicked_day, 150);
+                pivot = GetZigZagPivot(clicked_day, 40);
+                Print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ pivot = ", pivot);
             }
             else
             {
@@ -490,55 +490,63 @@ datetime GetZigZagPivot(datetime datetime_base, int lookback=30)
         Print("GetZigZagPivot: Falha ao obter horário da sessão para ", TimeToString(datetime_base));
         return 0;
     }
-
-    // 2. Encontrar o índice da barra correspondente ao final da sessão
-    // Usamos false para exact match, para pegar a barra mais próxima se o horário exato não existir
-    int end_pos = iBarShift(_Symbol, _Period, session_end, false);
     
-    if (end_pos < 0) 
-    {
-        Print("GetZigZagPivot: Barra final da sessão não encontrada.");
-        return 0;
-    }
-
     double zigzag_buffer[];
-    ArraySetAsSeries(zigzag_buffer, true);
-    
-    // 3. Copiar os últimos 'lookback' valores do buffer 0 do ZigZag a partir de end_pos
-    // Como ArraySetAsSeries é true, o índice 0 do buffer copiado será o end_pos (mais recente nesse contexto de cópia)
-    if (CopyBuffer(g_zigzag_handle, 0, end_pos, lookback, zigzag_buffer) < lookback)
+    ArraySetAsSeries(zigzag_buffer, true); // Garante que o índice 0 é o mais recente dos copiados
+
+    if (CopyBuffer(g_zigzag_handle, 0, session_start, lookback, zigzag_buffer) < lookback)
     {
-        // Se não conseguir copiar tudo (ex: início do histórico), tenta copiar o que der
         int available = Bars(_Symbol, _Period);
-        if (available < lookback) lookback = available;
-        if (CopyBuffer(g_zigzag_handle, 0, end_pos, lookback, zigzag_buffer) <= 0)
+        if (available < lookback) lookback = available; // Ajusta lookback se não houver dados suficientes
+        if (CopyBuffer(g_zigzag_handle, 0, session_start, lookback, zigzag_buffer) <= 0)
         {
-             Print("GetZigZagPivot: Erro ao copiar buffer do ZigZag");
+             Print("GetZigZagPivot: Erro ao copiar buffer do ZigZag a partir de session_start");
              return 0;
         }
     }
-        
+
     datetime time[];
-    ArraySetAsSeries(time, true);
-    if (CopyTime(_Symbol, _Period, end_pos, lookback, time) < lookback)
+    ArraySetAsSeries(time, true); // Garante que o índice 0 é o mais recente dos copiados
+    if (CopyTime(_Symbol, _Period, session_start, lookback, time) < lookback)
     {
-         // Fallback similar ao buffer
-         if (CopyTime(_Symbol, _Period, end_pos, lookback, time) <= 0)
+         if (CopyTime(_Symbol, _Period, session_start, lookback, time) <= 0)
          {
-            Print("GetZigZagPivot: Erro ao copiar tempo");
+            Print("GetZigZagPivot: Erro ao copiar tempo a partir de session_start");
             return 0;
          }
     }
         
     // 4. Varre do mais recente (final do dia) para o mais antigo
+    datetime found_pivots[];
+    
     for (int i = 0; i < lookback; i++)
     {
         // Se o valor for válido e diferente de 0 e diferente de EMPTY_VALUE, é um pivô
         if (zigzag_buffer[i] != 0 && zigzag_buffer[i] != EMPTY_VALUE)
         {
-            
-            Print("Pivô encontrado em: ", TimeToString(time[i], TIME_DATE|TIME_MINUTES));
-            return time[i]; // Retorna a data do pivô encontrado
+            int size = ArraySize(found_pivots);
+            ArrayResize(found_pivots, size + 1);
+            found_pivots[size] = time[i];
+        }
+    }
+
+    // Imprime todos os pivôs encontrados
+    int total_pivots = ArraySize(found_pivots);
+    if(total_pivots > 0)
+    {
+        Print("Total de pivôs encontrados: ", total_pivots);
+        for(int i = 0; i < total_pivots; i++)
+        {
+             Print("Pivô [", i, "] encontrado em: ", TimeToString(found_pivots[i], TIME_DATE|TIME_MINUTES));
+        }
+        
+        if (total_pivots > 1)
+        {
+             return found_pivots[0]; // Retorna o segundo pivot (indice 1)
+        }
+        else
+        {
+             return found_pivots[0]; // Retorna o unico encontrado
         }
     }
     
@@ -564,6 +572,13 @@ StdDevChannelValues DrawAndGetStdDevChannelValues(datetime datetime_ini, datetim
     ObjectSetDouble(0, obj_name, OBJPROP_DEVIATION, deviation);
     ObjectSetInteger(0, obj_name, OBJPROP_COLOR, clrBlue); // Cor padrão, pode ser parametrizada
     ObjectSetInteger(0, obj_name, OBJPROP_RAY, true);      // Estende o canal
+
+    // Propriedades para tornar o objeto selecionável e editável
+    ObjectSetInteger(0, obj_name, OBJPROP_SELECTABLE, true);
+    ObjectSetInteger(0, obj_name, OBJPROP_SELECTED, true);
+    ObjectSetInteger(0, obj_name, OBJPROP_HIDDEN, false);
+    ObjectSetInteger(0, obj_name, OBJPROP_STATE, true);
+    ObjectSetInteger(0, obj_name, OBJPROP_ZORDER, 0);
 
     // --- 2. Cálculo Matemático para garantir precisão e retorno imediato ---
     // Precisamos dos dados de fechamento no intervalo [datetime_ini, datetime_end]
