@@ -37,6 +37,14 @@ struct StdDevChannelValues
     double lineDown;
 };
 
+//--- Estrutura para retorno do range da sessão
+struct SessionRange
+{
+    double max;
+    double min;
+    bool is_valid;
+};
+
 //--- Variáveis globais
 string g_object_prefix;            // Prefixo para os nomes dos objetos no gráfico
 string g_comment_robot = "";
@@ -482,6 +490,77 @@ int OnCalculate(const int rates_total,
 
 
 //+------------------------------------------------------------------+
+//| Calcula o range (max/min) dos 4 primeiros candles da sessão      |
+//+------------------------------------------------------------------+
+SessionRange CalculateSessionRange(datetime session_start)
+{
+    SessionRange result;
+    result.max = -DBL_MAX;
+    result.min = DBL_MAX;
+    result.is_valid = false;
+    
+    MqlRates first_rates[];
+    // Copia 4 candles a partir do session_start
+    if(CopyRates(_Symbol, _Period, session_start, 4, first_rates) == 4)
+    {
+        result.max = first_rates[0].high;
+        result.min = first_rates[0].low;
+        for(int k=0; k<4; k++)
+        {
+            if(first_rates[k].high > result.max) result.max = first_rates[k].high;
+            if(first_rates[k].low < result.min) result.min = first_rates[k].low;
+        }
+        result.is_valid = true;
+    }
+    else
+    {
+        Print("CalculateSessionRange: Falha ao copiar os 4 primeiros candles.");
+    }
+    return result;
+}
+
+//+------------------------------------------------------------------+
+//| Verifica se a maioria dos candles (70%) está dentro do range     |
+//+------------------------------------------------------------------+
+bool IsMajorityInside(datetime start_time, datetime end_time, double range_max, double range_min, double threshold_percent=0.7)
+{
+    MqlRates rates[];
+    int total = CopyRates(_Symbol, _Period, start_time, end_time, rates);
+    
+    if(total <= 0) return false;
+    
+    int inside_count = 0;
+    
+    for(int i=0; i<total; i++)
+    {
+        double p_high = rates[i].high;
+        double p_low = rates[i].low;
+        double p_range = p_high - p_low;
+        
+        if(p_range == 0) 
+        {
+             // Se o candle não tem corpo/tamanho, verificamos se o preço está dentro
+             if(p_high <= range_max && p_low >= range_min) inside_count++;
+             continue;
+        }
+        
+        double overlap_high = MathMin(p_high, range_max);
+        double overlap_low = MathMax(p_low, range_min);
+        
+        if(overlap_high > overlap_low)
+        {
+            double overlap = overlap_high - overlap_low;
+            if(overlap > 0.5 * p_range)
+            {
+                inside_count++;
+            }
+        }
+    }
+    
+    return ((double)inside_count / total) >= threshold_percent;
+}
+
+//+------------------------------------------------------------------+
 //| Retorna o datetime do último pivô identificado pelo ZigZag        |
 //+------------------------------------------------------------------+
 datetime GetZigZagPivot(datetime datetime_base, int lookback=30)
@@ -527,28 +606,10 @@ datetime GetZigZagPivot(datetime datetime_base, int lookback=30)
     // 4. Varre do mais recente (final do dia) para o mais antigo
     
     // --- Calcula o range dos 4 primeiros candles do dia ---
-    double range_max = -DBL_MAX;
-    double range_min = DBL_MAX;
-    bool range_calculated = false;
-    
-    MqlRates first_rates[];
-    // Copia 4 candles a partir do session_start
-    if(CopyRates(_Symbol, _Period, session_start, 4, first_rates) == 4)
-    {
-        range_max = first_rates[0].high;
-        range_min = first_rates[0].low;
-        for(int k=0; k<4; k++)
-        {
-            if(first_rates[k].high > range_max) range_max = first_rates[k].high;
-            if(first_rates[k].low < range_min) range_min = first_rates[k].low;
-        }
-        range_calculated = true;
-        // Print("Range dos 4 primeiros candles: Max=", range_max, " Min=", range_min);
-    }
-    else
-    {
-        Print("GetZigZagPivot: Falha ao copiar os 4 primeiros candles para cálculo do range.");
-    }
+    SessionRange range = CalculateSessionRange(session_start);
+    double range_max = range.max;
+    double range_min = range.min;
+    bool range_calculated = range.is_valid;
 
     datetime found_pivots_times[]; // Array temporário para compatibilidade se necessário, mas vamos usar o struct
     
@@ -596,6 +657,20 @@ datetime GetZigZagPivot(datetime datetime_base, int lookback=30)
                                 if(overlap > 0.5 * p_range)
                                 {
                                     found_pivots[size].isInside = true;
+                                }
+                                else
+                                {
+                                    // Verifica se 70% dos candles desde o inicio da sessao estao dentro
+                                    if(IsMajorityInside(session_start, time[i], range_max, range_min, 0.7))
+                                    {
+                                        found_pivots[size].isInside = true;
+                                        Print("Pivô ", size, " está Inside");
+                                    }
+                                    else
+                                    {
+                                        Print("Pivô ", size, " não está Inside");
+                                        break; // Interrompe a busca se não atender aos critérios
+                                    }
                                 }
                             }
                         }
