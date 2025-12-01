@@ -14,16 +14,7 @@
 //--- Inclusões
 #include <Arrays/ArrayLong.mqh>
 
-//--- Modos de Desenho
-enum EDrawMode
-{
-    MODE_VISIBLE_DAYS, // Desenha canais para todos os dias visíveis
-    MODE_CLICK_DAY     // Desenha canais ao clicar em um dia específico
-};
-
-
 //--- Inputs
-input EDrawMode InpDrawMode = MODE_CLICK_DAY; // Modo de Desenho
 input int InpChannelLevels = 10;
 input color InpBaseChannelColor = C'63, 46, 139'; // Cor do Canal Base
 input color InpUpperLevelsColor = C'76, 76, 158';  // Cor dos Níveis Superiores
@@ -45,7 +36,6 @@ struct ChannelData
 string g_object_prefix;            // Prefixo para os nomes dos objetos no gráfico
 string g_comment_robot = "";
 CArrayLong g_drawn_days;     // Armazena os dias para os quais os canais já foram desenhados
-int g_last_visible_bar_index = -1; // Para detectar rolagem do gráfico
 
 //--- Flags globais para o estado das teclas (compatível com Wine/Linux)
 bool g_shift_down = false;
@@ -60,7 +50,6 @@ int OnInit()
     //--- Cria um prefixo único para os objetos deste indicador
     g_object_prefix = "FimatheDailyChannel_" + IntegerToString(ChartID()) + "_";
     g_drawn_days.Clear();
-    g_last_visible_bar_index = -1;
 
     return (INIT_SUCCEEDED);
 }
@@ -324,7 +313,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
     }
 
     // --- Lida com o evento de clique (Shift + Click) ---
-    if(id == CHARTEVENT_CLICK && InpDrawMode == MODE_CLICK_DAY && g_shift_down)
+    if(id == CHARTEVENT_CLICK && g_shift_down)
     {
         datetime time_from_click;
         double price_from_click;
@@ -378,57 +367,8 @@ int OnCalculate(const int rates_total,
                 const long &volume[],
                 const int &spread[])
 {
-    if(InpDrawMode != MODE_VISIBLE_DAYS)
-    {
-        return(rates_total);
-    }
-
-    // --- Lógica simplificada e robusta para MODE_VISIBLE_DAYS ---
-    int first_visible_bar = (int)ChartGetInteger(0, CHART_FIRST_VISIBLE_BAR, 0); // Correção: Adicionado sub_window=0
-    if(first_visible_bar == g_last_visible_bar_index && prev_calculated > 1)
-    {
-        return(rates_total);
-    }
-    
-    Print("OnCalculate: Mudança no gráfico detectada. Limpando e redesenhando...");
-    // --- Houve mudança na visualização, então limpa e redesenha tudo ---
-    ObjectsDeleteAll(0, g_object_prefix);
-    g_drawn_days.Clear();
-    g_last_visible_bar_index = first_visible_bar;
-
-    CArrayLong days_in_chart;
-    for(int i = 0; i < rates_total; i++)
-    {
-        MqlDateTime dt;
-        TimeToStruct(time[i], dt);
-        dt.hour = 0; dt.min = 0; dt.sec = 0;
-        datetime current_day = StructToTime(dt);
-
-        if(days_in_chart.Search(current_day) == -1)
-        {
-            days_in_chart.Add(current_day);
-        }
-    }
-    Print("OnCalculate: Encontrados ", days_in_chart.Total(), " dias únicos no histórico do gráfico.");
-
-    // --- Desenha canais para todos os dias únicos encontrados ---
-    for(int i = 0; i < days_in_chart.Total(); i++)
-    {
-        datetime day = (datetime)days_in_chart.At(i);
-        Print("OnCalculate: Processando dia ", TimeToString(day, TIME_DATE));
-        if(g_drawn_days.Search(day) == -1) // Segurança adicional, embora já limpo
-        {
-            ChannelData data = CalculateChannelForDay(day);
-            if(data.is_valid)
-            {
-                DrawDayChannels(data, day);
-                g_drawn_days.Add(day);
-            }
-        }
-    }
-    
-    Print("OnCalculate: Redesenho concluído.");
-    ChartRedraw();
+    // A lógica de desenho agora é tratada exclusivamente pelo OnChartEvent (clique).
+    // OnCalculate não precisa mais processar os dias visíveis.
     return (rates_total);
 }
 //+------------------------------------------------------------------+
