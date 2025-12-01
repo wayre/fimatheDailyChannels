@@ -15,6 +15,9 @@ class FimatheStrategy
 private:
    string m_symbol;
    int m_channel_multiplier;
+   double m_tp_multiplier;
+   double m_sl_multiplier;
+   double m_reversal_tp_multiplier;
    double m_range_canal;
    double m_canal_superior;
    double m_canal_inferior;
@@ -25,10 +28,13 @@ private:
 public:
    /**
     * Inicializa a classe com os parâmetros da estratégia, como o símbolo a ser negociado e o multiplicador do canal.*/
-   void Init(string symbol, int channel_multiplier)
+   void Init(string symbol, int channel_multiplier, double tp_multiplier, double sl_multiplier, double reversal_tp_multiplier)
    {
       m_symbol = symbol;
       m_channel_multiplier = channel_multiplier;
+      m_tp_multiplier = tp_multiplier;
+      m_sl_multiplier = sl_multiplier;
+      m_reversal_tp_multiplier = reversal_tp_multiplier;
       Reset();
    }
 
@@ -59,33 +65,37 @@ public:
          return;
       }
 
-      // --- Obtém dinamicamente o horário de início da sessão ---
-      datetime session_start_time = GetSessionStartTime(m_symbol);
-
-      // Se não houver sessão definida para hoje (retorno 0), não faz nada.
-      if (session_start_time == 0)
+      // --- Obtém dinamicamente o horário de início da sessão para saber quando o mercado abre ---
+      datetime session_open_time = GetSessionStartTime(m_symbol);
+      if (session_open_time == 0 || TimeCurrent() < session_open_time)
       {
-         return;
+         return; // Retorna se não houver sessão hoje ou se o mercado ainda não abriu
       }
 
-      // --- Verifica se as 4 velas já se formaram usando contagem de tempo ---
-      // A estratégia requer que 4 velas se formem para definir o canal.
-      // Ex: M5, início 09:00. 1ª vela 09:00-09:05, 2ª 09:05-09:10, 3ª 09:10-09:15, 4ª 09:15-09:20.
-      // A 4ª vela fecha às 09:20. O cálculo só pode ocorrer após esse tempo.
-      long period_seconds = PeriodSeconds(timeframe);
-      datetime fourth_bar_close_time = session_start_time + (datetime)(4 * period_seconds);
+      // --- Define o horário base da estratégia (01:00) conforme a regra documentada ---
+      MqlDateTime dt_base;
+      TimeToStruct(TimeCurrent(), dt_base);
+      dt_base.hour = 1;
+      dt_base.min = 0;
+      dt_base.sec = 0;
+      datetime strategy_base_time = StructToTime(dt_base);
 
-      // Se o tempo atual for menor que o tempo de fechamento da quarta barra, significa que ela ainda não se formou.
+      // --- Verifica se as 4 velas a partir da base (01:00) já se formaram ---
+      // A 4ª vela (iniciada às 01:15 em M5) fecha às 01:20.
+      long period_seconds = PeriodSeconds(timeframe);
+      datetime fourth_bar_close_time = strategy_base_time + (datetime)(4 * period_seconds);
+
+      // Se o tempo atual for menor que o tempo de fechamento da quarta barra, ela ainda não se formou.
       if (TimeCurrent() < fourth_bar_close_time)
       {
          return; // Aguardando as 4 barras fecharem.
       }
+      Print("As 4 barras (base 01:00) devem existir. Calculando níveis...");
 
       // --- Agora que as 4 barras devem existir, copiamos os dados desse intervalo ---
       MqlRates rates[];
-      // Usamos a versão de CopyRates que define um intervalo de tempo [início, fim)
-      // para evitar qualquer ambiguidade e garantir que peguemos apenas as 4 barras da sessão.
-      int copied = CopyRates(m_symbol, timeframe, session_start_time, fourth_bar_close_time, rates);
+      // Usamos a base da estratégia (01:00) como início para garantir a captura das velas corretas
+      int copied = CopyRates(m_symbol, timeframe, strategy_base_time, fourth_bar_close_time, rates);
 
       // Esta verificação agora é uma segurança extra.
       if (copied < 4)
@@ -93,36 +103,52 @@ public:
          Print("Erro: Não foi possível copiar as 4 velas da sessão mesmo após o tempo esperado. Velas copiadas: ", copied);
          return;
       }
+      Print("Copiadas: ", copied);
 
       // --- Calcula o canal com base nessas 4 velas ---
       double max_high = 0;
-      double min_low = 999999;
+      double min_low = 999999999; // Usando valor alto para garantir a primeira atribuição
 
       // O array 'rates' contém as 4 primeiras velas da sessão
       // rates[0] é a vela mais antiga
       for (int i = 0; i < 4; i++)
       {
-         Print(i, " >>> ", rates[i].time, " high: ", rates[i].high, " low: ", rates[i].low);
+         Print("Vela ", i, ": High=", rates[i].high, ", Low=", rates[i].low);
          if (rates[i].high > max_high)
             max_high = rates[i].high;
          if (rates[i].low < min_low)
             min_low = rates[i].low;
       }
 
-      m_range_canal = ((max_high * 100) - (min_low * 100)) / 100;
+      // Calcula o range inicial do canal
+      double range_canal = max_high - min_low;
+      Print("Range inicial do canal: ", range_canal);
 
-      // Se o canal for maior que 1000 pontos então divide na metade.
-      m_range_canal = (m_range_canal * 100) >= 1000 ? ((m_range_canal * 100) / 2) / 100 : m_range_canal;
+      // Verifica a regra do "Canal Grande" (> 1000 pontos) usando o método robusto do Indicador
+      double point = SymbolInfoDouble(m_symbol, SYMBOL_POINT);
+      bool isBigChannel = (point > 0 && (range_canal / point) >= 1000);
 
-      m_canal_superior = max_high;
+      if (isBigChannel)
+      {
+         range_canal /= 2;
+         max_high = min_low + range_canal; // Ajusta o topo do canal
+         // Print("Canal grande (>1000pts), range ajustado para a metade: ", NormalizeDouble(range_canal, _Digits));
+      }
+
+      // Define as propriedades da classe com os valores calculados
+      m_range_canal = NormalizeDouble(range_canal, _Digits);
       m_canal_inferior = min_low;
+      m_canal_superior = max_high; // max_high já foi ajustado se o canal era grande
       m_levels_calculated_today = true; // Marca como calculado para o dia de hoje.
 
       // --- Calcula os limites de entrada junto com os níveis do canal ---
       maximumBullPriceValue = m_canal_superior + m_range_canal + (m_range_canal * 0.2);
       maximumBearPriceValue = m_canal_inferior - m_range_canal - (m_range_canal * 0.2);
 
-      Print("Níveis do Canal Calculados (4 primeiras velas): Superior=", m_canal_superior, ", Inferior=", m_canal_inferior, ", Range=", m_range_canal);
+      Print("Níveis do Canal Calculados (4 primeiras velas):");
+      Print("Superior=", m_canal_superior, ", Inferior=", m_canal_inferior, ", Range=", m_range_canal);
+      Print("MaximumBullValue:", maximumBullPriceValue);
+      Print("MaximumBearValue:", maximumBearPriceValue);
    }
 
    // retorna o valor limite permitido para a operacao de venda
@@ -145,7 +171,7 @@ public:
    {
       if (!m_levels_calculated_today)
          return false;
-
+      Print("Identificado um sinal de compra.");
       return last_close_price > m_canal_superior + m_range_canal;
    }
 
@@ -227,7 +253,7 @@ public:
     */
    double GetBuyTakeProfit() const
    {
-      return m_canal_superior + (2.75 * m_range_canal);
+      return m_canal_superior + (m_tp_multiplier * m_range_canal);
    }
 
    /**
@@ -237,7 +263,7 @@ public:
     */
    double GetBuyStopLoss() const
    {
-      return m_canal_inferior - (0.25 * m_range_canal);
+      return m_canal_inferior - (m_sl_multiplier * m_range_canal);
    }
 
    /**
@@ -247,7 +273,7 @@ public:
     */
    double GetSellTakeProfit() const
    {
-      return m_canal_inferior - (2.75 * m_range_canal);
+      return m_canal_inferior - (m_tp_multiplier * m_range_canal);
    }
 
    /**
@@ -257,7 +283,7 @@ public:
     */
    double GetSellStopLoss() const
    {
-      return m_canal_superior + (0.25 * m_range_canal);
+      return m_canal_superior + (m_sl_multiplier * m_range_canal);
    }
 
    /**
@@ -279,7 +305,7 @@ public:
     */
    double GetBuyReversalTakeProfit(double reversal_entry_price) const
    {
-      return reversal_entry_price - (m_range_canal * 1.75);
+      return reversal_entry_price - (m_range_canal * m_reversal_tp_multiplier);
    }
 
    /**
@@ -301,6 +327,6 @@ public:
     */
    double GetSellReversalTakeProfit(double reversal_entry_price) const
    {
-      return reversal_entry_price + (m_range_canal * 1.75);
+      return reversal_entry_price + (m_range_canal * m_reversal_tp_multiplier);
    }
 };

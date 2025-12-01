@@ -37,7 +37,7 @@ int OnInit()
 
     //--- Inicializar módulos
     g_session.Init();
-    g_strategy.Init(InpTradeSymbol, InpChannelMultiplier);
+    g_strategy.Init(InpTradeSymbol, InpChannelMultiplier, InpTakeProfitMultiplier, InpStopLossMultiplier, InpReversalTakeProfitMultiplier);
     g_trader.Init(InpMagicNumber);
 
     Print("RoboFimathe: Inicialização concluída.");
@@ -73,7 +73,23 @@ void OnTick()
         g_initial_entry_price = 0;
         g_initial_deal_type = -1; // Reseta o tipo da operação inicial
         g_strategy.Reset();
-        Print("Resetado para novo dia");
+
+        MqlDateTime dt;
+        string dayOfWeekStr;
+        TimeToStruct(TimeCurrent(), dt); // Pega o tempo atual do servidor
+        switch(dt.day_of_week)
+        {
+            case 0: dayOfWeekStr = "DOM"; break;
+            case 1: dayOfWeekStr = "SEG"; break;
+            case 2: dayOfWeekStr = "TER"; break;
+            case 3: dayOfWeekStr = "QUA"; break;
+            case 4: dayOfWeekStr = "QUI"; break;
+            case 5: dayOfWeekStr = "SEX"; break;
+            case 6: dayOfWeekStr = "SAB"; break;
+            default: dayOfWeekStr = "N/A"; break;
+        }
+        Print("Resetado para novo dia. => ", TimeToString(TimeCurrent()), 
+            " - ", dayOfWeekStr);
     }
 
     // Se já há operações abertas, ou se a reversão já ocorreu, não faz mais nada no OnTick
@@ -100,7 +116,7 @@ void OnTick()
     if (g_session.IsNewCandle(_Symbol, timeframe))
     {
         MqlRates rates[];
-        if (CopyRates(_Symbol, timeframe, 1, 1, rates) < 1)
+        if (CopyRates(_Symbol, timeframe, 0, 1, rates) < 1)
         {
             return;
         }
