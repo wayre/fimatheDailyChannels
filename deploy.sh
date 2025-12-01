@@ -20,7 +20,7 @@ mkdir -p "${EXPERT_DEST}"
 
 # Copia todos os arquivos e pastas da origem para o destino
 # O '*' garante que o conteúdo da pasta seja copiado, e não a pasta em si.
-cp -r "${EXPERT_SOURCE}/"* "${EXPERT_DEST}/"
+cp -rv "${EXPERT_SOURCE}/"* "${EXPERT_DEST}/"
 
 # --- 2. Sincronização dos Indicadores (FimatheLevels) ---
 echo "▶️ Sincronizando Indicators/FimatheChannels..."
