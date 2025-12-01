@@ -525,11 +525,39 @@ datetime GetZigZagPivot(datetime datetime_base, int lookback=30)
     }
         
     // 4. Varre do mais recente (final do dia) para o mais antigo
+    
+    // --- Calcula o range dos 4 primeiros candles do dia ---
+    double range_max = -DBL_MAX;
+    double range_min = DBL_MAX;
+    bool range_calculated = false;
+    
+    MqlRates first_rates[];
+    // Copia 4 candles a partir do session_start
+    if(CopyRates(_Symbol, _Period, session_start, 4, first_rates) == 4)
+    {
+        range_max = first_rates[0].high;
+        range_min = first_rates[0].low;
+        for(int k=0; k<4; k++)
+        {
+            if(first_rates[k].high > range_max) range_max = first_rates[k].high;
+            if(first_rates[k].low < range_min) range_min = first_rates[k].low;
+        }
+        range_calculated = true;
+        // Print("Range dos 4 primeiros candles: Max=", range_max, " Min=", range_min);
+    }
+    else
+    {
+        Print("GetZigZagPivot: Falha ao copiar os 4 primeiros candles para cálculo do range.");
+    }
+
+    datetime found_pivots_times[]; // Array temporário para compatibilidade se necessário, mas vamos usar o struct
+    
     // crie um struct contendo o datetime e o valor do pivô
     struct PivotData
     {
         datetime time;
         double value;
+        bool isInside;
     };
     
     PivotData found_pivots[];
@@ -545,8 +573,41 @@ datetime GetZigZagPivot(datetime datetime_base, int lookback=30)
                 ArrayResize(found_pivots, size + 1);
                 found_pivots[size].time  = time[i];
                 found_pivots[size].value = zigzag_buffer[i];
+                found_pivots[size].isInside = false;
+                
+                // Verifica se está "Inside"
+                if(range_calculated)
+                {
+                    MqlRates p_rate[];
+                    if(CopyRates(_Symbol, _Period, time[i], 1, p_rate) == 1)
+                    {
+                        double p_high = p_rate[0].high;
+                        double p_low = p_rate[0].low;
+                        double p_range = p_high - p_low;
+                        
+                        if(p_range > 0)
+                        {
+                            double overlap_high = MathMin(p_high, range_max);
+                            double overlap_low = MathMax(p_low, range_min);
+                            
+                            if(overlap_high > overlap_low)
+                            {
+                                double overlap = overlap_high - overlap_low;
+                                if(overlap > 0.5 * p_range)
+                                {
+                                    found_pivots[size].isInside = true;
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
+    }
+    Print("Total de pivôs encontrados: ", ArraySize(found_pivots));
+    for(int i = 0; i < ArraySize(found_pivots); i++)
+    {
+        Print("Pivô ", i, ": Tempo=", TimeToString(found_pivots[i].time, TIME_DATE|TIME_SECONDS), ", Valor=", found_pivots[i].value, ", Inside=", found_pivots[i].isInside);
     }
 
     int total_pivots = ArraySize(found_pivots);
@@ -559,8 +620,10 @@ datetime GetZigZagPivot(datetime datetime_base, int lookback=30)
     Print("Total de pivôs encontrados: ", total_pivots);
     for(int i = 0; i < total_pivots; i++)
     {
-        Print("Pivô [", i, "] encontrado em: ", TimeToString(found_pivots[i].time, TIME_DATE|TIME_MINUTES), " Valor: ", found_pivots[i].value);
+        Print("Pivô [", i, "] encontrado em: ", TimeToString(found_pivots[i].time, TIME_DATE|TIME_MINUTES), 
+              " Valor: ", found_pivots[i].value, " Inside: ", found_pivots[i].isInside);
     }
+    
     
     if (total_pivots > 1)
     {
