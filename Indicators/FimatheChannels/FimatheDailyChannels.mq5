@@ -16,13 +16,11 @@
 
 //--- Inputs
 input int InpChannelLevels = 10;
-input color InpBaseChannelColor = C'63, 46, 139'; // Cor do Canal Base
-input color InpUpperLevelsColor = C'76, 76, 158';  // Cor dos Níveis Superiores
-input color InpLowerLevelsColor = C'76, 76, 158';    // Cor dos Níveis Inferiores
+input color InpFiboColor = C'63, 46, 139';      // Cor do Fibonacci
 input ENUM_LINE_STYLE InpLineStyle = STYLE_SOLID;   // Estilo da Linha
 
 //--- Estrutura para armazenar os dados do canal
-struct ChannelData
+struct FiboData
 {
     double max_high;
     double min_low;
@@ -120,38 +118,16 @@ bool GetSessionTimesForDay(const string symbol, const datetime for_day, datetime
     return false;
 }
 
+
+
+
 //+------------------------------------------------------------------+
-//| Desenha um nível de canal como um retângulo no gráfico          |
+//| Calcula os dados do Fibonacci para um dia específico                |
 //+------------------------------------------------------------------+
-void DrawChannelLevel(const string name, const double price, const string text, const color line_color, const ENUM_LINE_STYLE line_style, const datetime start_time, const datetime end_time, const int width = 1)
+FiboData CalculateFiboDataForDay(const datetime for_day)
 {
-    if(ObjectFind(0, name) < 0) // Correção: < 0 significa que não encontrou
-    {
-        if(!ObjectCreate(0, name, OBJ_RECTANGLE, 0, start_time, price, end_time, price))
-            return;
-    }
-    else
-    {
-        ObjectMove(0, name, 0, start_time, price);
-        ObjectMove(0, name, 1, end_time, price);
-    }
-
-    ObjectSetInteger(0, name, OBJPROP_COLOR, line_color);
-    ObjectSetInteger(0, name, OBJPROP_STYLE, line_style);
-    ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
-    ObjectSetString(0, name, OBJPROP_TEXT, text);
-    ObjectSetInteger(0, name, OBJPROP_BACK, true);
-    ObjectSetInteger(0, name, OBJPROP_FILL, false);
-}
-
-
-//+------------------------------------------------------------------+
-//| Calcula os níveis do canal para um dia específico                |
-//+------------------------------------------------------------------+
-ChannelData CalculateChannelForDay(const datetime for_day)
-{
-    Print("CalculateChannelForDay: Iniciando cálculo para o dia ", TimeToString(for_day, TIME_DATE));
-    ChannelData result = {0};
+    Print("CalculateFiboDataForDay: Iniciando cálculo para o dia ", TimeToString(for_day, TIME_DATE));
+    FiboData result = {0};
     result.is_valid = false;
 
     string symbol = Symbol();
@@ -159,20 +135,20 @@ ChannelData CalculateChannelForDay(const datetime for_day)
 
     if(!GetSessionTimesForDay(symbol, for_day, session_start, session_end))
     {
-        Print("CalculateChannelForDay: Falha ao obter horário da sessão.");
+        Print("CalculateFiboDataForDay: Falha ao obter horário da sessão.");
         return result;
     }
-    Print("CalculateChannelForDay: Sessão encontrada: ", TimeToString(session_start, TIME_MINUTES), " - ", TimeToString(session_end, TIME_MINUTES));
+    Print("CalculateFiboDataForDay: Sessão encontrada: ", TimeToString(session_start, TIME_MINUTES), " - ", TimeToString(session_end, TIME_MINUTES));
 
     MqlDateTime dt_temp;
     TimeToStruct(for_day, dt_temp);
     ENUM_TIMEFRAMES timeframe = (dt_temp.day_of_week == MONDAY) ? PERIOD_M15 : PERIOD_M5;
-    Print("CalculateChannelForDay: Timeframe definido para ", EnumToString(timeframe));
+    Print("CalculateFiboDataForDay: Timeframe definido para ", EnumToString(timeframe));
 
     int bar_shift = iBarShift(symbol, timeframe, session_start, false);
     if(bar_shift < 0)
     {
-        Print("CalculateChannelForDay: Não foi encontrada a barra de início da sessão.");
+        Print("CalculateFiboDataForDay: Não foi encontrada a barra de início da sessão.");
         return result;
     }
     
@@ -184,10 +160,10 @@ ChannelData CalculateChannelForDay(const datetime for_day)
     int copied = CopyRates(symbol, timeframe, first_bar_open_time, end_time_for_copy, rates);
     if(copied < 4)
     {
-        Print("CalculateChannelForDay: Falha ao copiar rates. Esperado: 4, Copiado: ", copied);
+        Print("CalculateFiboDataForDay: Falha ao copiar rates. Esperado: 4, Copiado: ", copied);
         return result;
     }
-    Print("CalculateChannelForDay: ", copied, " rates copiados com sucesso.");
+    Print("CalculateFiboDataForDay: ", copied, " rates copiados com sucesso.");
 
     double max_high = 0;
     double min_low = 999999999;
@@ -204,7 +180,7 @@ ChannelData CalculateChannelForDay(const datetime for_day)
     {
         result.range /= 2;
         max_high = min_low + result.range;
-        Print("CalculateChannelForDay: Range > 1000 pontos, ajustado para ", result.range);
+        Print("CalculateFiboDataForDay: Range > 1000 pontos, ajustado para ", result.range);
     }
     
     g_comment_robot = "TAMANHO DO CANAL: " + DoubleToString(result.range/point,0);
@@ -215,38 +191,78 @@ ChannelData CalculateChannelForDay(const datetime for_day)
     result.session_end = session_end;
     result.is_valid = true;
 
-    Print("CalculateChannelForDay: Cálculo para ", TimeToString(for_day, TIME_DATE), " concluído com sucesso.");
+    Print("CalculateFiboDataForDay: Cálculo para ", TimeToString(for_day, TIME_DATE), " concluído com sucesso.");
     return result;
 }
 
 //+------------------------------------------------------------------+
-//| Desenha todos os níveis de canal para um dia                     |
+//| Desenha o objeto Fibonacci para um dia                           |
 //+------------------------------------------------------------------+
-void DrawDayChannels(const ChannelData &data, const datetime for_day)
+void DrawDayFibonacci(const FiboData &data, const datetime for_day)
 {
     if(!data.is_valid) return;
 
     string day_str = TimeToString(for_day, TIME_DATE);
-    string obj_suffix = " ("+g_comment_robot+"pts)";
+    string obj_name = g_object_prefix + day_str + "_Fibo";
 
-    // Canal Base
-    DrawChannelLevel(g_object_prefix + day_str + "_Base_Up", data.max_high, "Canal Superior" + obj_suffix, InpBaseChannelColor, STYLE_DASH, data.session_start, data.session_end, 2);
-    DrawChannelLevel(g_object_prefix + day_str + "_Base_Down", data.min_low, "Canal Inferior" + obj_suffix, InpBaseChannelColor, STYLE_DASH, data.session_start, data.session_end, 2);
+    // Define o tempo de início e fim para o objeto Fibonacci
+    MqlDateTime dt;
+    TimeToStruct(for_day, dt);
+    dt.hour = 1; dt.min = 0; dt.sec = 0;
+    datetime time1 = StructToTime(dt);
+    dt.hour = 23; dt.min = 0; dt.sec = 0;
+    datetime time2 = StructToTime(dt);
 
-    // Níveis Superiores
-    for(int i = 1; i <= InpChannelLevels; i++)
+    // Cria ou move o objeto Fibonacci
+    if(ObjectFind(0, obj_name) < 0)
     {
-        double level_price = data.max_high + (i * data.range);
-        string level_name = "Nível " + IntegerToString(i) + " Up";
-        DrawChannelLevel(g_object_prefix + day_str + "_Up_" + IntegerToString(i), level_price, level_name, InpUpperLevelsColor, InpLineStyle, data.session_start, data.session_end);
+        if(!ObjectCreate(0, obj_name, OBJ_FIBO, 0, time1, data.min_low, time2, data.max_high))
+        {
+            Print("Erro ao criar objeto Fibonacci: ", GetLastError());
+            return;
+        }
+    }
+    else
+    {
+        ObjectMove(0, obj_name, 0, time1, data.min_low);
+        ObjectMove(0, obj_name, 1, time2, data.max_high);
     }
 
-    // Níveis Inferiores
+    // Define as propriedades do objeto
+    ObjectSetInteger(0, obj_name, OBJPROP_COLOR, InpFiboColor);
+    ObjectSetInteger(0, obj_name, OBJPROP_STYLE, InpLineStyle);
+    ObjectSetInteger(0, obj_name, OBJPROP_WIDTH, 1);
+    ObjectSetInteger(0, obj_name, OBJPROP_BACK, true);
+    ObjectSetString(0, obj_name, OBJPROP_TEXT, "Fibo " + day_str);
+
+
+
+    // Define os níveis base (0 e 100%)
+    ObjectSetDouble(0, obj_name, OBJPROP_LEVELVALUE, 0, 0);
+    ObjectSetString(0, obj_name, OBJPROP_LEVELTEXT, 0, "0.0 (%$)");
+    ObjectSetDouble(0, obj_name, OBJPROP_LEVELVALUE, 1, 1);
+    ObjectSetString(0, obj_name, OBJPROP_LEVELTEXT, 1, "100.0 (%$)");
+
+    int level_index = 2;
+
+    // Define os níveis de projeção superiores
     for(int i = 1; i <= InpChannelLevels; i++)
     {
-        double level_price = data.min_low - (i * data.range);
-        string level_name = "Nível " + IntegerToString(i) + " Down";
-        DrawChannelLevel(g_object_prefix + day_str + "_Down_" + IntegerToString(i), level_price, level_name, InpLowerLevelsColor, InpLineStyle, data.session_start, data.session_end);
+        double level_value = 1.0 + i;
+        ObjectSetDouble(0, obj_name, OBJPROP_LEVELVALUE, level_index, level_value);
+        string level_text = "Nível " + IntegerToString(i) + " Up (" + DoubleToString(level_value * 100, 1) + "% - %$)";
+        ObjectSetString(0, obj_name, OBJPROP_LEVELTEXT, level_index, level_text);
+        level_index++;
+    }
+
+    // Define os níveis de projeção inferiores
+    for(int i = 1; i <= InpChannelLevels; i++)
+    {
+        double level_value = 0.0 - i;
+        ObjectSetDouble(0, obj_name, OBJPROP_LEVELVALUE, level_index, level_value);
+        string level_text = "Nível " + IntegerToString(i) + " Down (" + DoubleToString(level_value * 100, 1) + "% - %$)";
+        ObjectSetString(0, obj_name, OBJPROP_LEVELTEXT, level_index, level_text);
+        level_index++;
     }
 }
 
@@ -334,10 +350,10 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
             ObjectsDeleteAll(0, g_object_prefix);
             g_drawn_days.Clear();
 
-            ChannelData data = CalculateChannelForDay(clicked_day);
+            FiboData data = CalculateFiboDataForDay(clicked_day);
             if(data.is_valid)
             {
-                DrawDayChannels(data, clicked_day);
+                DrawDayFibonacci(data, clicked_day);
                 g_drawn_days.Add(clicked_day);
                 ChartRedraw();
             }
