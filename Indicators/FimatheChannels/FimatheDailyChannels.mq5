@@ -30,6 +30,13 @@ struct FiboData
     datetime session_end;
 };
 
+//--- Estrutura para retorno dos valores do canal de desvio padrão
+struct StdDevChannelValues
+{
+    double lineUp;
+    double lineDown;
+};
+
 //--- Variáveis globais
 string g_object_prefix;            // Prefixo para os nomes dos objetos no gráfico
 string g_comment_robot = "";
@@ -37,6 +44,8 @@ CArrayLong g_drawn_days;     // Armazena os dias para os quais os canais já for
 
 //--- Flags globais para o estado das teclas (compatível com Wine/Linux)
 bool g_shift_down = false;
+int g_zigzag_handle = INVALID_HANDLE;
+
 
 
 //+------------------------------------------------------------------+
@@ -48,6 +57,14 @@ int OnInit()
     //--- Cria um prefixo único para os objetos deste indicador
     g_object_prefix = "FimatheDailyChannel_" + IntegerToString(ChartID()) + "_";
     g_drawn_days.Clear();
+
+    // Inicializa o ZigZag com os parâmetros 12, 5, 3
+    g_zigzag_handle = iCustom(_Symbol, _Period, "Examples\\ZigZag", 12, 5, 3);
+    if (g_zigzag_handle == INVALID_HANDLE)
+    {
+        Print("Erro ao criar handle do ZigZag");
+        return INIT_FAILED;
+    }
 
     return (INIT_SUCCEEDED);
 }
@@ -63,6 +80,11 @@ void OnDeinit(const int reason)
     //--- Remove todos os objetos criados pelo indicador
     ObjectsDeleteAll(0, g_object_prefix);
     g_drawn_days.Clear();
+    
+    if(g_zigzag_handle != INVALID_HANDLE)
+    {
+        IndicatorRelease(g_zigzag_handle);
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -372,6 +394,59 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
             {
                 Print("Falha ao calcular os dados do canal para o dia clicado.");
             }
+
+            // --- Lógica do Canal de Desvio Padrão ---
+            // 1. Identificar o ultimo candle pivô com a funcao GetZigZagPivot.
+            //    Regra: "pivo da ultima perna do dia anterior até o fechamento do 4 candle do timeframe atual do clicked_day"
+            
+            datetime session_start, session_end;
+            datetime pivot = 0;
+            datetime fourth_candle_time = 0;
+            
+            // Obtém o início da sessão do dia clicado
+            if(GetSessionTimesForDay(_Symbol, clicked_day, session_start, session_end))
+            {
+                // Calcula o horário de abertura da 4ª vela (start + 3 * period)
+                // Se quiser o fechamento da 4ª (abertura da 5ª), seria + 4 * period.
+                // "Até o 4 candle" geralmente inclui o 4º. Vamos usar a abertura do 4º candle como base de referência.
+                // Se o ZigZag marcou um topo/fundo no 4º candle, ele será encontrado.
+                
+                // Nota: O usuário pediu "até o 4 candle". 
+                // Vamos definir o limite como o fechamento da 4ª vela (início da 5ª) para garantir que a 4ª vela completa seja analisada se necessário.
+                int period_seconds = PeriodSeconds(_Period);
+                fourth_candle_time = session_start + (3 * period_seconds); 
+                
+                // Busca o dia de negociação anterior (ignora fins de semana/feriados)
+                // int day_index = iBarShift(_Symbol, PERIOD_D1, clicked_day);
+                // datetime previous_day = iTime(_Symbol, PERIOD_D1, day_index + 1);
+
+                pivot = GetZigZagPivot(clicked_day, 150);
+            }
+            else
+            {
+                Print("Não foi possível obter o horário da sessão para cálculo do pivô.");
+            }
+            
+            if (pivot > 0)
+            {
+                datetime std_start, std_end;
+                std_start = pivot;
+                std_end = fourth_candle_time;
+                datetime target = session_start;
+                
+                StdDevChannelValues values = DrawAndGetStdDevChannelValues(std_start, std_end, target, 1.62);
+                
+                Print("StdDev Channel: Start=", TimeToString(std_start), " End=", TimeToString(std_end), 
+                      " Up=", values.lineUp, " Down=", values.lineDown);
+            }
+            else
+            {
+                Print("Nenhum pivô encontrado para o cálculo do StdDev Channel.");
+            }
+
+            // datetime pivot = GetZigZagPivot();
+            
+            // StdDevChannelValues values = DrawAndGetStdDevChannelValues(pivot, clicked_day, clicked_day);
         }
         else
         {
@@ -400,4 +475,155 @@ int OnCalculate(const int rates_total,
 }
 //+------------------------------------------------------------------+
 
+
+//+------------------------------------------------------------------+
+//| Retorna o datetime do último pivô identificado pelo ZigZag        |
+//+------------------------------------------------------------------+
+datetime GetZigZagPivot(datetime datetime_base, int lookback=30)
+{
+    if (g_zigzag_handle == INVALID_HANDLE) return 0;
+
+    // 1. Determinar o fim da sessão para o dia do datetime_base
+    datetime session_start, session_end;
+    if(!GetSessionTimesForDay(_Symbol, datetime_base, session_start, session_end))
+    {
+        Print("GetZigZagPivot: Falha ao obter horário da sessão para ", TimeToString(datetime_base));
+        return 0;
+    }
+
+    // 2. Encontrar o índice da barra correspondente ao final da sessão
+    // Usamos false para exact match, para pegar a barra mais próxima se o horário exato não existir
+    int end_pos = iBarShift(_Symbol, _Period, session_end, false);
+    
+    if (end_pos < 0) 
+    {
+        Print("GetZigZagPivot: Barra final da sessão não encontrada.");
+        return 0;
+    }
+
+    double zigzag_buffer[];
+    ArraySetAsSeries(zigzag_buffer, true);
+    
+    // 3. Copiar os últimos 'lookback' valores do buffer 0 do ZigZag a partir de end_pos
+    // Como ArraySetAsSeries é true, o índice 0 do buffer copiado será o end_pos (mais recente nesse contexto de cópia)
+    if (CopyBuffer(g_zigzag_handle, 0, end_pos, lookback, zigzag_buffer) < lookback)
+    {
+        // Se não conseguir copiar tudo (ex: início do histórico), tenta copiar o que der
+        int available = Bars(_Symbol, _Period);
+        if (available < lookback) lookback = available;
+        if (CopyBuffer(g_zigzag_handle, 0, end_pos, lookback, zigzag_buffer) <= 0)
+        {
+             Print("GetZigZagPivot: Erro ao copiar buffer do ZigZag");
+             return 0;
+        }
+    }
+        
+    datetime time[];
+    ArraySetAsSeries(time, true);
+    if (CopyTime(_Symbol, _Period, end_pos, lookback, time) < lookback)
+    {
+         // Fallback similar ao buffer
+         if (CopyTime(_Symbol, _Period, end_pos, lookback, time) <= 0)
+         {
+            Print("GetZigZagPivot: Erro ao copiar tempo");
+            return 0;
+         }
+    }
+        
+    // 4. Varre do mais recente (final do dia) para o mais antigo
+    for (int i = 0; i < lookback; i++)
+    {
+        // Se o valor for válido e diferente de 0 e diferente de EMPTY_VALUE, é um pivô
+        if (zigzag_buffer[i] != 0 && zigzag_buffer[i] != EMPTY_VALUE)
+        {
+            
+            Print("Pivô encontrado em: ", TimeToString(time[i], TIME_DATE|TIME_MINUTES));
+            return time[i]; // Retorna a data do pivô encontrado
+        }
+    }
+    
+    return 0; // Nenhum pivô encontrado na janela
+}
+
+//+------------------------------------------------------------------+
+//| Desenha um Canal de Desvio Padrão e retorna os valores no target |
+//+------------------------------------------------------------------+
+StdDevChannelValues DrawAndGetStdDevChannelValues(datetime datetime_ini, datetime datetime_end, datetime datetime_target, double deviation=1.0)
+{
+    StdDevChannelValues result = {0.0, 0.0};
+    string obj_name = g_object_prefix + "StdDev_Channel";
+
+    // --- 1. Cria ou atualiza o objeto gráfico ---
+    if(ObjectFind(0, obj_name) >= 0)
+    {
+        ObjectDelete(0, obj_name);
+    }
+
+    ObjectCreate(0, obj_name, OBJ_STDDEVCHANNEL, 0, datetime_ini, 0, datetime_end, 0);
+
+    ObjectSetDouble(0, obj_name, OBJPROP_DEVIATION, deviation);
+    ObjectSetInteger(0, obj_name, OBJPROP_COLOR, clrBlue); // Cor padrão, pode ser parametrizada
+    ObjectSetInteger(0, obj_name, OBJPROP_RAY, true);      // Estende o canal
+
+    // --- 2. Cálculo Matemático para garantir precisão e retorno imediato ---
+    // Precisamos dos dados de fechamento no intervalo [datetime_ini, datetime_end]
+    
+    MqlRates rates[];
+    // Seleciona o timeframe atual
+    ENUM_TIMEFRAMES timeframe = Period();
+    
+    // Copia os rates. O start_time e end_time do CopyRates são inclusivos?
+    // CopyRates(symbol, timeframe, start_time, stop_time, ...)
+    int copied = CopyRates(_Symbol, timeframe, datetime_ini, datetime_end, rates);
+    
+    if(copied > 1)
+    {
+        // Cálculo da Regressão Linear (Mínimos Quadrados)
+        // y = mx + c
+        // x é o índice (0 a N-1), y é o preço de fechamento
+        
+        double sum_x = 0, sum_y = 0, sum_xy = 0, sum_xx = 0;
+        int n = copied;
+        
+        for(int i = 0; i < n; i++)
+        {
+            double y = rates[i].close;
+            double x = (double)i; // Índice relativo ao início do array copiado
+            
+            sum_x += x;
+            sum_y += y;
+            sum_xy += (x * y);
+            sum_xx += (x * x);
+        }
+        
+        double m = (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x);
+        double c = (sum_y - m * sum_x) / n;
+        
+        // --- 3. Cálculo do Desvio Padrão ---
+        double sum_sq_residuals = 0;
+        for(int i = 0; i < n; i++)
+        {
+            double y = rates[i].close;
+            double x = (double)i;
+            double predicted = m * x + c;
+            sum_sq_residuals += MathPow(y - predicted, 2);
+        }
+        
+        double std_dev = MathSqrt(sum_sq_residuals / n);
+        
+        // --- 4. Projeção para o datetime_target ---
+        // Precisamos saber qual é o 'x' correspondente ao datetime_target.
+        // Como 'rates' começa em datetime_ini (índice 0), precisamos calcular a distância em barras.
+        
+        long seconds_diff = datetime_target - rates[0].time; // Diferença do início da série
+        double target_index = (double)seconds_diff / PeriodSeconds(timeframe);
+        
+        double projected_price = m * target_index + c;
+        
+        result.lineUp = projected_price + (deviation * std_dev);
+        result.lineDown = projected_price - (deviation * std_dev);
+    }
+    
+    return result;
+}
 
