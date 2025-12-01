@@ -140,9 +140,6 @@ bool GetSessionTimesForDay(const string symbol, const datetime for_day, datetime
     return false;
 }
 
-
-
-
 //+------------------------------------------------------------------+
 //| Calcula os dados do Fibonacci para um dia específico                |
 //+------------------------------------------------------------------+
@@ -339,6 +336,102 @@ void HandleMouseMoveEvent(const long &lparam, const double &dparam)
 
 
 //+------------------------------------------------------------------+
+//| Processa e desenha o Fibonacci para o dia clicado                |
+//+------------------------------------------------------------------+
+void ProcessFibonacci(datetime clicked_day)
+{
+    // Limpa objetos antigos e desenha o novo
+    ObjectsDeleteAll(0, g_object_prefix);
+    g_drawn_days.Clear();
+
+    FiboData data = CalculateFiboDataForDay(clicked_day);
+    if(data.is_valid)
+    {
+        DrawDayFibonacci(data, clicked_day);
+        g_drawn_days.Add(clicked_day);
+        ChartRedraw();
+    }
+    else
+    {
+        Print("Falha ao calcular os dados do canal para o dia clicado.");
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Processa e desenha o Canal de Desvio Padrão                      |
+//+------------------------------------------------------------------+
+void ProcessStdDevChannel(datetime clicked_day)
+{
+    // --- Lógica do Canal de Desvio Padrão ---
+    // 1. Identificar o ultimo candle pivô com a funcao GetZigZagPivot.
+    //    Regra: "pivo da ultima perna do dia anterior até o fechamento do 4 candle do timeframe atual do clicked_day"
+    
+    datetime session_start, session_end;
+    datetime pivot = 0;
+    datetime fourth_candle_time = 0;
+    
+    // Obtém o início da sessão do dia clicado
+    if(GetSessionTimesForDay(_Symbol, clicked_day, session_start, session_end))
+    {
+        // Calcula o horário de abertura da 4ª vela (start + 3 * period)
+        int period_seconds = PeriodSeconds(_Period);
+        fourth_candle_time = session_start + (3 * period_seconds); 
+        
+        pivot = GetZigZagPivot(clicked_day, 60);
+        Print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ pivot = ", pivot);
+    }
+    else
+    {
+        Print("Não foi possível obter o horário da sessão para cálculo do pivô.");
+        return;
+    }
+    
+    if (pivot > 0)
+    {
+        datetime std_start, std_end;
+        std_start = pivot;
+        std_end = fourth_candle_time;
+        datetime target = session_start;
+        
+        StdDevChannelValues values = DrawAndGetStdDevChannelValues(std_start, std_end, target, 1.62);
+        
+        Print("StdDev Channel: Start=", TimeToString(std_start), " End=", TimeToString(std_end), 
+              " Up=", values.lineUp, " Down=", values.lineDown);
+    }
+    else
+    {
+        Print("Nenhum pivô encontrado para o cálculo do StdDev Channel.");
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Lida com o evento de clique no gráfico                           |
+//+------------------------------------------------------------------+
+void HandleClickEvent(long lparam, double dparam)
+{
+    datetime time_from_click;
+    double price_from_click;
+    int subwindow = 0;
+
+    // Converte as coordenadas do clique (lparam=x, dparam=y) para uma data/hora válida
+    if(ChartXYToTimePrice(0, (int)lparam, (int)dparam, subwindow, time_from_click, price_from_click) && subwindow == 0)
+    {
+        // Normaliza para o início do dia
+        MqlDateTime dt;
+        TimeToStruct(time_from_click, dt);
+        dt.hour = 0; dt.min = 0; dt.sec = 0;
+        datetime clicked_day = StructToTime(dt);
+
+        ProcessFibonacci(clicked_day);
+        ProcessStdDevChannel(clicked_day);
+    }
+    else
+    {
+        Print("Clique fora da janela principal do gráfico.");
+    }
+}
+
+//+------------------------------------------------------------------+
 //| Função de evento do gráfico                                      |
 //+------------------------------------------------------------------+
 void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
@@ -363,95 +456,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
     // --- Lida com o evento de clique (Shift + Click) ---
     if(id == CHARTEVENT_CLICK && g_shift_down)
     {
-        datetime time_from_click;
-        double price_from_click;
-        int subwindow = 0;
-
-        // CORREÇÃO: Converte as coordenadas do clique (lparam=x, dparam=y) para uma data/hora válida
-        if(ChartXYToTimePrice(0, (int)lparam, (int)dparam, subwindow, time_from_click, price_from_click) && subwindow == 0)
-        {
-            // Normaliza para o início do dia
-            MqlDateTime dt;
-            TimeToStruct(time_from_click, dt);
-            dt.hour = 0; dt.min = 0; dt.sec = 0;
-            datetime clicked_day = StructToTime(dt);
-
-            // Print("Shift+Click para o dia: ", TimeToString(clicked_day, TIME_DATE));
-
-            // Limpa objetos antigos e desenha o novo
-            ObjectsDeleteAll(0, g_object_prefix);
-            g_drawn_days.Clear();
-
-            FiboData data = CalculateFiboDataForDay(clicked_day);
-            if(data.is_valid)
-            {
-                DrawDayFibonacci(data, clicked_day);
-                g_drawn_days.Add(clicked_day);
-                ChartRedraw();
-            }
-            else
-            {
-                Print("Falha ao calcular os dados do canal para o dia clicado.");
-            }
-
-            // --- Lógica do Canal de Desvio Padrão ---
-            // 1. Identificar o ultimo candle pivô com a funcao GetZigZagPivot.
-            //    Regra: "pivo da ultima perna do dia anterior até o fechamento do 4 candle do timeframe atual do clicked_day"
-            
-            datetime session_start, session_end;
-            datetime pivot = 0;
-            datetime fourth_candle_time = 0;
-            
-            // Obtém o início da sessão do dia clicado
-            if(GetSessionTimesForDay(_Symbol, clicked_day, session_start, session_end))
-            {
-                // Calcula o horário de abertura da 4ª vela (start + 3 * period)
-                // Se quiser o fechamento da 4ª (abertura da 5ª), seria + 4 * period.
-                // "Até o 4 candle" geralmente inclui o 4º. Vamos usar a abertura do 4º candle como base de referência.
-                // Se o ZigZag marcou um topo/fundo no 4º candle, ele será encontrado.
-                
-                // Nota: O usuário pediu "até o 4 candle". 
-                // Vamos definir o limite como o fechamento da 4ª vela (início da 5ª) para garantir que a 4ª vela completa seja analisada se necessário.
-                int period_seconds = PeriodSeconds(_Period);
-                fourth_candle_time = session_start + (3 * period_seconds); 
-                
-                // Busca o dia de negociação anterior (ignora fins de semana/feriados)
-                // int day_index = iBarShift(_Symbol, PERIOD_D1, clicked_day);
-                // datetime previous_day = iTime(_Symbol, PERIOD_D1, day_index + 1);
-
-                pivot = GetZigZagPivot(clicked_day, 40);
-                Print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ pivot = ", pivot);
-            }
-            else
-            {
-                Print("Não foi possível obter o horário da sessão para cálculo do pivô.");
-            }
-            
-            if (pivot > 0)
-            {
-                datetime std_start, std_end;
-                std_start = pivot;
-                std_end = fourth_candle_time;
-                datetime target = session_start;
-                
-                StdDevChannelValues values = DrawAndGetStdDevChannelValues(std_start, std_end, target, 1.62);
-                
-                Print("StdDev Channel: Start=", TimeToString(std_start), " End=", TimeToString(std_end), 
-                      " Up=", values.lineUp, " Down=", values.lineDown);
-            }
-            else
-            {
-                Print("Nenhum pivô encontrado para o cálculo do StdDev Channel.");
-            }
-
-            // datetime pivot = GetZigZagPivot();
-            
-            // StdDevChannelValues values = DrawAndGetStdDevChannelValues(pivot, clicked_day, clicked_day);
-        }
-        else
-        {
-            Print("Clique fora da janela principal do gráfico.");
-        }
+        HandleClickEvent(lparam, dparam);
     }
 }
 
@@ -491,6 +496,9 @@ datetime GetZigZagPivot(datetime datetime_base, int lookback=30)
         return 0;
     }
     
+    /**
+     * 2. Copiar os dados do ZigZag para o buffer
+     */
     double zigzag_buffer[];
     ArraySetAsSeries(zigzag_buffer, true); // Garante que o índice 0 é o mais recente dos copiados
 
@@ -517,40 +525,52 @@ datetime GetZigZagPivot(datetime datetime_base, int lookback=30)
     }
         
     // 4. Varre do mais recente (final do dia) para o mais antigo
-    datetime found_pivots[];
+    // crie um struct contendo o datetime e o valor do pivô
+    struct PivotData
+    {
+        datetime time;
+        double value;
+    };
+    
+    PivotData found_pivots[];
     
     for (int i = 0; i < lookback; i++)
     {
         // Se o valor for válido e diferente de 0 e diferente de EMPTY_VALUE, é um pivô
         if (zigzag_buffer[i] != 0 && zigzag_buffer[i] != EMPTY_VALUE)
         {
-            int size = ArraySize(found_pivots);
-            ArrayResize(found_pivots, size + 1);
-            found_pivots[size] = time[i];
+            if(time[i] < datetime_base)
+            {
+                int size = ArraySize(found_pivots);
+                ArrayResize(found_pivots, size + 1);
+                found_pivots[size].time  = time[i];
+                found_pivots[size].value = zigzag_buffer[i];
+            }
         }
     }
 
-    // Imprime todos os pivôs encontrados
     int total_pivots = ArraySize(found_pivots);
-    if(total_pivots > 0)
+    if(total_pivots <= 0)
     {
-        Print("Total de pivôs encontrados: ", total_pivots);
-        for(int i = 0; i < total_pivots; i++)
-        {
-             Print("Pivô [", i, "] encontrado em: ", TimeToString(found_pivots[i], TIME_DATE|TIME_MINUTES));
-        }
-        
-        if (total_pivots > 1)
-        {
-             return found_pivots[0]; // Retorna o segundo pivot (indice 1)
-        }
-        else
-        {
-             return found_pivots[0]; // Retorna o unico encontrado
-        }
+        return 0; // Nenhum pivô encontrado na janela
     }
     
-    return 0; // Nenhum pivô encontrado na janela
+    // Imprime todos os pivôs encontrados
+    Print("Total de pivôs encontrados: ", total_pivots);
+    for(int i = 0; i < total_pivots; i++)
+    {
+        Print("Pivô [", i, "] encontrado em: ", TimeToString(found_pivots[i].time, TIME_DATE|TIME_MINUTES), " Valor: ", found_pivots[i].value);
+    }
+    
+    if (total_pivots > 1)
+    {
+        return found_pivots[1].time; // Retorna o segundo pivot (indice 1)
+    }
+    else
+    {
+        return found_pivots[0].time; // Retorna o unico encontrado
+    }
+    
 }
 
 //+------------------------------------------------------------------+
