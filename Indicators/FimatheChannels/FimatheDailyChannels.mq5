@@ -13,10 +13,10 @@
 
 //--- Inclusões
 #include <Arrays/ArrayLong.mqh>
-
+// rgba(156, 156, 156, 1)
 //--- Inputs
-input int InpChannelLevels = 10;
-input color InpFiboColor = C'63, 46, 139';      // Cor do Fibonacci
+input color InpFiboColor = C'156, 156, 156';      // Cor do Fibonacci
+input color InpLevelColor = C'66, 65, 65'; // Cor opcional para os níveis do Fibonacci
 input ENUM_LINE_STYLE InpLineStyle = STYLE_SOLID;   // Estilo da Linha
 
 //--- Estrutura para armazenar os dados do canal
@@ -229,40 +229,51 @@ void DrawDayFibonacci(const FiboData &data, const datetime for_day)
     }
 
     // Define as propriedades do objeto
-    ObjectSetInteger(0, obj_name, OBJPROP_COLOR, InpFiboColor);
-    ObjectSetInteger(0, obj_name, OBJPROP_STYLE, InpLineStyle);
+    ObjectSetInteger(0, obj_name, OBJPROP_COLOR, C'74, 74, 74'); // Ajustado para usar InpFiboColor
+    ObjectSetInteger(0, obj_name, OBJPROP_STYLE, STYLE_DOT);
     ObjectSetInteger(0, obj_name, OBJPROP_WIDTH, 1);
     ObjectSetInteger(0, obj_name, OBJPROP_BACK, true);
     ObjectSetString(0, obj_name, OBJPROP_TEXT, "Fibo " + day_str);
 
+    // Propriedades para tornar o objeto selecionável e editável
+    ObjectSetInteger(0, obj_name, OBJPROP_SELECTABLE, true);
+    ObjectSetInteger(0, obj_name, OBJPROP_SELECTED, true);
+    ObjectSetInteger(0, obj_name, OBJPROP_HIDDEN, false);
+    ObjectSetInteger(0, obj_name, OBJPROP_STATE, true);
+    ObjectSetInteger(0, obj_name, OBJPROP_ZORDER, 0);
 
 
-    // Define os níveis base (0 e 100%)
-    ObjectSetDouble(0, obj_name, OBJPROP_LEVELVALUE, 0, 0);
-    ObjectSetString(0, obj_name, OBJPROP_LEVELTEXT, 0, "0.0 (%$)");
-    ObjectSetDouble(0, obj_name, OBJPROP_LEVELVALUE, 1, 1);
-    ObjectSetString(0, obj_name, OBJPROP_LEVELTEXT, 1, "100.0 (%$)");
 
-    int level_index = 2;
+    // Define o número total de níveis e seus valores
+    const int first = -10;
+    const int last  = 10;
+    const int count = last - first + 1;
+    ObjectSetInteger(0, obj_name, OBJPROP_LEVELS, count);
 
-    // Define os níveis de projeção superiores
-    for(int i = 1; i <= InpChannelLevels; i++)
+    int level_index = 0;
+    for(int i = first; i <= last; i++, level_index++)
     {
-        double level_value = 1.0 + i;
+        double level_value = (double)i;
         ObjectSetDouble(0, obj_name, OBJPROP_LEVELVALUE, level_index, level_value);
-        string level_text = "Nível " + IntegerToString(i) + " Up (" + DoubleToString(level_value * 100, 1) + "% - %$)";
+        
+        // Define cor, estilo e largura para cada nível
+        color level_color;
+        if(i == 0 || i == 1)
+        {
+            level_color = C'121, 121, 121';
+        }
+        else
+        {
+            level_color = (InpLevelColor == clrNONE) ? InpFiboColor : InpLevelColor;
+        }
+        
+        ObjectSetInteger(0, obj_name, OBJPROP_LEVELCOLOR, level_index, level_color);
+        ObjectSetInteger(0, obj_name, OBJPROP_LEVELSTYLE, level_index, InpLineStyle);
+        ObjectSetInteger(0, obj_name, OBJPROP_LEVELWIDTH, level_index, 1); // Largura 1 para todos os níveis
+        
+        // Define o texto como vazio para todos os níveis, conforme solicitado
+        string level_text = ""; 
         ObjectSetString(0, obj_name, OBJPROP_LEVELTEXT, level_index, level_text);
-        level_index++;
-    }
-
-    // Define os níveis de projeção inferiores
-    for(int i = 1; i <= InpChannelLevels; i++)
-    {
-        double level_value = 0.0 - i;
-        ObjectSetDouble(0, obj_name, OBJPROP_LEVELVALUE, level_index, level_value);
-        string level_text = "Nível " + IntegerToString(i) + " Down (" + DoubleToString(level_value * 100, 1) + "% - %$)";
-        ObjectSetString(0, obj_name, OBJPROP_LEVELTEXT, level_index, level_text);
-        level_index++;
     }
 }
 
