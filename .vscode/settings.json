@@ -1,0 +1,28 @@
+{
+  "mqlens.validation.enabled": false,
+  "mqlens.formatting.enabled": false,
+  "mqlens.intellisense.enabled": true,
+  "mqlens.hover.enabled": true,
+  "mqlens.completion.enabled": true,
+  "mqlens.diagnostics.maxProblems": 50,
+  "mqlens.formatting.indentSize": 3,
+  "mqlens.formatting.insertSpaces": true,
+  "files.exclude": {
+    "**/*.ex4": true,
+    "**/*.ex5": true,
+    "**/*_@!!@.mq4": true,
+    "**/*_@!!@.mq5": true,
+    "**/*_@!!@.mqh": true,
+    "**/*_@!!@.log": true,
+    "**/*_@!@.log": true,
+    "**/*_@!@.ex4": true,
+    "**/*_@!@.ex5": true,
+    "**/*_@!@.mq4": true,
+    "**/*_@!@.mq5": true,
+    "**/*_@!@.mqh": true
+  },
+  "editor.tabSize": 3,
+  "C_Cpp.default.forcedInclude": [
+    "/home/wayre/.vscode/extensions/l-i-v.mql-tools-2.2.0/data/mql5_en.mqh"
+  ]
+}
