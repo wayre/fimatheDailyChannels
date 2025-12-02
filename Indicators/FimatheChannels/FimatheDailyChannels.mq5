@@ -18,6 +18,7 @@
 input color InpFiboColor = C'156, 156, 156';      // Cor do Fibonacci
 input color InpLevelColor = C'66, 65, 65'; // Cor opcional para os níveis do Fibonacci
 input ENUM_LINE_STYLE InpLineStyle = STYLE_SOLID;   // Estilo da Linha
+input int InpLevels = 20; // Número de níveis do Fibonacci
 
 //--- Estrutura para armazenar os dados do canal
 struct FiboData
@@ -183,6 +184,7 @@ FiboData CalculateFiboDataForDay(const datetime for_day)
     }
     
     g_comment_robot = "TAMANHO DO CANAL: " + DoubleToString(result.range/point,0);
+    Comment(g_comment_robot);
 
     result.max_high = max_high;
     result.min_low = min_low;
@@ -200,17 +202,34 @@ FiboData CalculateFiboDataForDay(const datetime for_day)
 void DrawDayFibonacci(const FiboData &data, const datetime for_day)
 {
     if(!data.is_valid) return;
-
     string day_str = TimeToString(for_day, TIME_DATE);
     string obj_name = g_object_prefix + day_str + "_Fibo";
 
     // Define o tempo de início e fim para o objeto Fibonacci
     MqlDateTime dt;
+    datetime time1, time2;
     TimeToStruct(for_day, dt);
     dt.hour = 1; dt.min = 0; dt.sec = 0;
-    datetime time1 = StructToTime(dt);
-    dt.hour = 9; dt.min = 0; dt.sec = 0;
-    datetime time2 = StructToTime(dt);
+    time1 = StructToTime(dt);
+    
+    datetime s_start, s_end;
+    GetSessionTimesForDay(_Symbol, TimeCurrent(), s_start, s_end);
+
+    
+    TimeToStruct(s_start, dt);
+    dt.hour = 0; dt.min = 0; dt.sec = 0;
+    time2 = StructToTime(dt);
+
+    if(for_day == time2) // se for hoje
+    {
+        datetime last_datetime = iTime(_Symbol, PERIOD_CURRENT, 0);
+        datetime candidate = last_datetime + 60 * 60;
+        // time2 = candidate > s_end ? s_end : candidate;
+        time2 = last_datetime;
+    }else
+    {
+        time2 = s_end;
+    }
 
     // Cria ou move o objeto Fibonacci
     if(ObjectFind(0, obj_name) < 0)
@@ -244,8 +263,8 @@ void DrawDayFibonacci(const FiboData &data, const datetime for_day)
 
 
     // Define o número total de níveis e seus valores
-    const int first = -10;
-    const int last  = 10;
+    const int first = -InpLevels;
+    const int last  = InpLevels;
     const int count = last - first + 1;
     ObjectSetInteger(0, obj_name, OBJPROP_LEVELS, count);
 
