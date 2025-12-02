@@ -197,6 +197,50 @@ FiboData CalculateFiboDataForDay(const datetime for_day)
 }
 
 //+------------------------------------------------------------------+
+//| Calcula os dados do Fibonacci a partir de um canal de desvio     |
+//+------------------------------------------------------------------+
+FiboData CalculateFiboDataFromChannel(datetime selected_day, double lineUp, double lineDown)
+{
+    FiboData result = {0};
+    result.is_valid = false;
+
+    double range = MathAbs(lineUp - lineDown);
+    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    
+    if(point == 0) return result;
+
+    double points_range = range / point;
+
+    // Lógica de divisão do range se for maior que 1000 pontos
+    if(points_range > 1000)
+    {
+        int n = 2;
+        while(true)
+        {
+            double sub_range = points_range / n;
+            if(sub_range <= 900 && sub_range >= 500)
+            {
+                range = range / n;
+                Print("CalculateFiboDataFromChannel: Range original ", points_range, " dividido por ", n, " -> ", range/point);
+                break;
+            }
+            n++;
+            if(n > 100) break; // Proteção
+        }
+    }
+
+    result.min_low = MathMin(lineUp, lineDown);
+    result.range = range;
+    result.max_high = result.min_low + range;
+    
+    // Preenche horários da sessão
+    GetSessionTimesForDay(_Symbol, selected_day, result.session_start, result.session_end);
+    
+    result.is_valid = true;
+    return result;
+}
+
+//+------------------------------------------------------------------+
 //| Desenha o objeto Fibonacci para um dia                           |
 //+------------------------------------------------------------------+
 void DrawDayFibonacci(const FiboData &data, const datetime for_day)
@@ -204,7 +248,7 @@ void DrawDayFibonacci(const FiboData &data, const datetime for_day)
     if(!data.is_valid) return;
 
     string day_str = TimeToString(for_day, TIME_DATE);
-    string obj_name = g_object_prefix + day_str + "_Fibo";
+    string obj_name = g_object_prefix + "Fibo";
 
     // Define o tempo de início e fim para o objeto Fibonacci
     MqlDateTime dt;
@@ -349,6 +393,10 @@ void ProcessStdDevChannel(datetime clicked_day)
     // 1. Identificar o ultimo candle pivô com a funcao GetZigZagPivot.
     //    Regra: "pivo da ultima perna do dia anterior até o fechamento do 4 candle do timeframe atual do clicked_day"
     
+    // Limpa objetos antigos e desenha o novo
+    ObjectsDeleteAll(0, g_object_prefix);
+    g_drawn_days.Clear();
+
     datetime pivot = 0;
     
     SessionRange range_4candles_day = getSessionRange(clicked_day);
@@ -360,12 +408,32 @@ void ProcessStdDevChannel(datetime clicked_day)
         std_start = pivot;
         std_end = range_4candles_day.first_candle_end;
         datetime target = range_4candles_day.first_candle_start;
+        Print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> std_start", std_start);
+        Print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> std_end", std_end);
+        Print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> target", target);
         
         StdDevChannelValues values = DrawAndGetStdDevChannelValues(std_start, std_end, target, 1.62);
+
+        FiboData fibo_data = CalculateFiboDataFromChannel(clicked_day, values.lineUp, values.lineDown);
+        Print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> lineUp", values.lineUp);
+        Print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> lineDown", values.lineDown);
         
-        Print("StdDev Channel: Start=", TimeToString(std_start), " End=", TimeToString(std_end), 
-              " Up=", values.lineUp, " Down=", values.lineDown);
-    }
+        Print("fibo_data.max_high", fibo_data.max_high);
+        Print("fibo_data.min_low", fibo_data.min_low);
+        Print("fibo_data.range", fibo_data.range);
+        Print("fibo_data.session_start", fibo_data.session_start);
+        Print("fibo_data.session_end", fibo_data.session_end);
+        if( fibo_data.is_valid)
+        {
+            DrawDayFibonacci(fibo_data, clicked_day);
+            g_drawn_days.Add(clicked_day);
+            ChartRedraw();
+        }
+        else
+        {
+            Print("Falha ao calcular os dados do canal para o dia clicado.");
+        }
+    }   
     else
     {
         Print("Nenhum pivô encontrado para o cálculo do StdDev Channel.");
@@ -512,12 +580,12 @@ SessionRange getSessionRange(datetime selected_day)
     if(dt.day_of_week == MONDAY)
     {
         timeframe = PERIOD_M15;
-        Print("Dia da semana: ", weekdays[dt.day_of_week], " - Timeframe: ", timeframe);
+        // Print("Dia da semana: ", weekdays[dt.day_of_week], " - Timeframe: ", timeframe);
     }
     else
     {
         timeframe = PERIOD_M5;
-        Print("Dia da semana: ", weekdays[dt.day_of_week], " - Timeframe: ", timeframe);
+        // Print("Dia da semana: ", weekdays[dt.day_of_week], " - Timeframe: ", timeframe);
     }
 
     // 3. Encontrar índice do candle que contém o session_start
@@ -529,22 +597,23 @@ SessionRange getSessionRange(datetime selected_day)
         return result;
     }
 
-    // 4. Checar se existem 4 candles completos a partir deste índice
-    int total_bars = Bars(symbol, timeframe);
-
-    int available = total_bars - start_pos;
-
-    if(available < 4)
+    // 4. Checar se existem 4 candles completos a partir deste índice (para frente no tempo, indices menores)
+    // Precisamos dos indices: start_pos, start_pos-1, start_pos-2, start_pos-3
+    if(start_pos < 3)
     {
-        Print("CalculateSessionRange: Ainda não existem 4 candles da sessão. Formados: ", available);
+        Print("CalculateSessionRange: Ainda não existem 4 candles da sessão. StartPos: ", start_pos);
         return result;
     }
 
     // 5. Copiar os 4 primeiros candles da sessão
+    // CopyRates com start_pos copia para o passado (indices maiores).
+    // Queremos copiar do start_pos-3 (mais novo) até start_pos (mais velho).
+    // Se começarmos em start_pos-3 e copiarmos 4, teremos: start_pos-3, start_pos-2, start_pos-1, start_pos.
+    
     MqlRates first_rates[];
     ArrayResize(first_rates, 4);
 
-    int copied = CopyRates(symbol, timeframe, start_pos, 4, first_rates);
+    int copied = CopyRates(symbol, timeframe, start_pos - 3, 4, first_rates);
 
     if(copied != 4)
     {
@@ -693,7 +762,7 @@ datetime GetZigZagPivot(datetime datetime_base, int lookback=50)
             found_pivots[size].isInside = false;
 
             //Apenas pivots do dia anterior ao datetime_base
-            Print("[", size, "]=> ", TimeToString(found_pivots[size].time, TIME_DATE|TIME_MINUTES));
+            // Print("[", size, "]=> ", TimeToString(found_pivots[size].time, TIME_DATE|TIME_MINUTES));
             
             // VERIFICA SE ESTÁ "INSIDE" (dentro do range dos 4 primeiros candles)
             MqlRates pivo_rate[];
@@ -714,7 +783,7 @@ datetime GetZigZagPivot(datetime datetime_base, int lookback=50)
                     // Se houver sobreposição
                     if(overlap_high < overlap_low)
                     {
-                        Print("Pivô ", i, " não está Inside");
+                        // Print("Pivô ", i, " não está Inside");
                     }
 
                     double overlap = overlap_high - overlap_low;
@@ -730,11 +799,11 @@ datetime GetZigZagPivot(datetime datetime_base, int lookback=50)
                         if(IsMajorityInside(session_start, time[i], range_max, range_min, 0.85))
                         {
                             found_pivots[size].isInside = true;
-                            Print("Pivô ", size, " está Inside (Critério da Maioria)");
+                            // Print("Pivô ", size, " está Inside (Critério da Maioria)");
                         }
                         else
                         {
-                            Print("Pivô ", size, " não está Inside");
+                            // Print("Pivô ", size, " não está Inside");
 
                             // resultado do último pivot encontrado
                             if(size > 0)
@@ -798,63 +867,20 @@ StdDevChannelValues DrawAndGetStdDevChannelValues(datetime datetime_ini, datetim
     ObjectSetInteger(0, obj_name, OBJPROP_ZORDER, 0);
 
     // --- 2. Cálculo Matemático para garantir precisão e retorno imediato ---
-    // Precisamos dos dados de fechamento no intervalo [datetime_ini, datetime_end]
+    // --- 2. Força a atualização do gráfico para garantir que o objeto foi processado ---
+    ChartRedraw();
+
+    // --- 3. Obtém os valores diretamente do objeto ---
+    // O canal de desvio padrão tem 3 linhas:
+    // 0: Linha central (Regressão Linear)
+    // 1: Linha Superior (Upper)
+    // 2: Linha Inferior (Lower)
     
-    MqlRates rates[];
-    // Seleciona o timeframe atual
-    ENUM_TIMEFRAMES timeframe = Period();
+    double val_up = ObjectGetValueByTime(0, obj_name, datetime_target, 1);
+    double val_down = ObjectGetValueByTime(0, obj_name, datetime_target, 2);
     
-    // Copia os rates. O start_time e end_time do CopyRates são inclusivos?
-    // CopyRates(symbol, timeframe, start_time, stop_time, ...)
-    int copied = CopyRates(_Symbol, timeframe, datetime_ini, datetime_end, rates);
-    
-    if(copied > 1)
-    {
-        // Cálculo da Regressão Linear (Mínimos Quadrados)
-        // y = mx + c
-        // x é o índice (0 a N-1), y é o preço de fechamento
-        
-        double sum_x = 0, sum_y = 0, sum_xy = 0, sum_xx = 0;
-        int n = copied;
-        
-        for(int i = 0; i < n; i++)
-        {
-            double y = rates[i].close;
-            double x = (double)i; // Índice relativo ao início do array copiado
-            
-            sum_x += x;
-            sum_y += y;
-            sum_xy += (x * y);
-            sum_xx += (x * x);
-        }
-        
-        double m = (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x);
-        double c = (sum_y - m * sum_x) / n;
-        
-        // --- 3. Cálculo do Desvio Padrão ---
-        double sum_sq_residuals = 0;
-        for(int i = 0; i < n; i++)
-        {
-            double y = rates[i].close;
-            double x = (double)i;
-            double predicted = m * x + c;
-            sum_sq_residuals += MathPow(y - predicted, 2);
-        }
-        
-        double std_dev = MathSqrt(sum_sq_residuals / n);
-        
-        // --- 4. Projeção para o datetime_target ---
-        // Precisamos saber qual é o 'x' correspondente ao datetime_target.
-        // Como 'rates' começa em datetime_ini (índice 0), precisamos calcular a distância em barras.
-        
-        long seconds_diff = datetime_target - rates[0].time; // Diferença do início da série
-        double target_index = (double)seconds_diff / PeriodSeconds(timeframe);
-        
-        double projected_price = m * target_index + c;
-        
-        result.lineUp = projected_price + (deviation * std_dev);
-        result.lineDown = projected_price - (deviation * std_dev);
-    }
+    result.lineUp = val_up;
+    result.lineDown = val_down;
     
     return result;
 }
