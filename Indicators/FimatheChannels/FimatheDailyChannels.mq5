@@ -349,31 +349,17 @@ void ProcessStdDevChannel(datetime clicked_day)
     // 1. Identificar o ultimo candle pivô com a funcao GetZigZagPivot.
     //    Regra: "pivo da ultima perna do dia anterior até o fechamento do 4 candle do timeframe atual do clicked_day"
     
-    datetime session_start, session_end;
     datetime pivot = 0;
-    datetime fourth_candle_time = 0;
     
-    // Obtém o início da sessão do dia clicado
-    if(GetSessionTimesForDay(_Symbol, clicked_day, session_start, session_end))
-    {
-        // Calcula o horário de abertura da 4ª vela (start + 3 * period)
-        int period_seconds = PeriodSeconds(_Period);
-        fourth_candle_time = session_start + (3 * period_seconds); 
-        
-        pivot = GetZigZagPivot(clicked_day);
-    }
-    else
-    {
-        Print("Não foi possível obter o horário da sessão para cálculo do pivô.");
-        return;
-    }
+    SessionRange range_4candles_day = getSessionRange(clicked_day);
+    pivot = GetZigZagPivot(clicked_day);
     
     if (pivot > 0)
     {
         datetime std_start, std_end;
         std_start = pivot;
-        std_end = fourth_candle_time;
-        datetime target = session_start;
+        std_end = range_4candles_day.first_candle_end;
+        datetime target = range_4candles_day.first_candle_start;
         
         StdDevChannelValues values = DrawAndGetStdDevChannelValues(std_start, std_end, target, 1.62);
         
@@ -404,7 +390,7 @@ void HandleClickWayreChannel(long lparam, double dparam)
         dt.hour = 0; dt.min = 0; dt.sec = 0;
         datetime clicked_day = StructToTime(dt);
 
-        ProcessFibonacci(clicked_day);
+        // ProcessFibonacci(clicked_day);
         ProcessStdDevChannel(clicked_day);
     }
     else
@@ -751,7 +737,10 @@ datetime GetZigZagPivot(datetime datetime_base, int lookback=50)
                             Print("Pivô ", size, " não está Inside");
 
                             // resultado do último pivot encontrado
-                            return_datetime = found_pivots[size-1].time;
+                            if(size > 0)
+                            {
+                                return_datetime = found_pivots[size-1].time;
+                            }
                             break; // Interrompe a busca se não atender aos critérios
                         }
                     }
