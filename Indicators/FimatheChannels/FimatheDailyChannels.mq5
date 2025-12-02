@@ -42,6 +42,10 @@ struct SessionRange
 {
     double max;
     double min;
+    double range;
+    bool   valid;
+    datetime first_candle_start;
+    datetime first_candle_end;
 };
 
 //--- Variáveis globais
@@ -51,6 +55,7 @@ CArrayLong g_drawn_days;     // Armazena os dias para os quais os canais já for
 
 //--- Flags globais para o estado das teclas (compatível com Wine/Linux)
 bool g_shift_down = false;
+bool g_ctrl_down = false;
 int g_zigzag_handle = INVALID_HANDLE;
 
 
@@ -152,55 +157,24 @@ bool GetSessionTimesForDay(const string symbol, const datetime for_day, datetime
 //+------------------------------------------------------------------+
 FiboData CalculateFiboDataForDay(const datetime for_day)
 {
-    // Print("CalculateFiboDataForDay: Iniciando cálculo para o dia ", TimeToString(for_day, TIME_DATE));
     FiboData result = {0};
     result.is_valid = false;
 
     string symbol = Symbol();
-    datetime session_start, session_end;
 
-    if(!GetSessionTimesForDay(symbol, for_day, session_start, session_end))
-    {
-        Print("CalculateFiboDataForDay: Falha ao obter horário da sessão.");
-        return result;
-    }
-    Print("CalculateFiboDataForDay: Sessão encontrada: ", TimeToString(session_start, TIME_MINUTES), " - ", TimeToString(session_end, TIME_MINUTES));
+    SessionRange range_4candles_day = getSessionRange(for_day);
+    if (!range_4candles_day.valid) return result;   
 
-    MqlDateTime dt_temp;
-    TimeToStruct(for_day, dt_temp);
-    ENUM_TIMEFRAMES timeframe = (dt_temp.day_of_week == MONDAY) ? PERIOD_M15 : PERIOD_M5;
-    // Print("CalculateFiboDataForDay: Timeframe definido para ", EnumToString(timeframe));
+    // Pega o maior high e o menor low dos 4 primeiros candles
+    double max_high = range_4candles_day.max;
+    double min_low = range_4candles_day.min;
 
-    int bar_shift = iBarShift(symbol, timeframe, session_start, false);
-    if(bar_shift < 0)
-    {
-        Print("CalculateFiboDataForDay: Não foi encontrada a barra de início da sessão.");
-        return result;
-    }
-    
-    datetime first_bar_open_time = iTime(symbol, timeframe, bar_shift);
-    
-    datetime end_time_for_copy = first_bar_open_time + (datetime)(4 * PeriodSeconds(timeframe));
-
-    MqlRates rates[];
-    int copied = CopyRates(symbol, timeframe, first_bar_open_time, end_time_for_copy, rates);
-    if(copied < 4)
-    {
-        Print("CalculateFiboDataForDay: Falha ao copiar rates. Esperado: 4, Copiado: ", copied);
-        return result;
-    }
-
-    double max_high = 0;
-    double min_low = 999999999;
-    for(int i = 0; i < 4; i++)
-    {
-        if(rates[i].high > max_high) max_high = rates[i].high;
-        if(rates[i].low < min_low) min_low = rates[i].low;
-    }
-
-    result.range = max_high - min_low;
+    // Pega o range dos 4 primeiros candles
+    result.range = range_4candles_day.range;
     double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
 
+    
+    // Ajusta o range para ser múltiplo de 1000 pontos
     if(point > 0 && result.range / point >= 1000)
     {
         result.range /= 2;
@@ -212,8 +186,8 @@ FiboData CalculateFiboDataForDay(const datetime for_day)
 
     result.max_high = max_high;
     result.min_low = min_low;
-    result.session_start = session_start;
-    result.session_end = session_end;
+    result.session_start = range_4candles_day.first_candle_start;
+    result.session_end = range_4candles_day.first_candle_end;
     result.is_valid = true;
 
     Print("CalculateFiboDataForDay: Cálculo para ", TimeToString(for_day, TIME_DATE), " concluído com sucesso.");
@@ -413,7 +387,7 @@ void ProcessStdDevChannel(datetime clicked_day)
 //+------------------------------------------------------------------+
 //| Lida com o evento de clique no gráfico                           |
 //+------------------------------------------------------------------+
-void HandleClickEvent(long lparam, double dparam)
+void HandleClickWayreChannel(long lparam, double dparam)
 {
     datetime time_from_click;
     double price_from_click;
@@ -437,6 +411,30 @@ void HandleClickEvent(long lparam, double dparam)
     }
 }
 
+void HandleClickFimathe(long lparam, double dparam)
+{
+    datetime time_from_click;
+    double price_from_click;
+    int subwindow = 0;
+
+    // Converte as coordenadas do clique (lparam=x, dparam=y) para uma data/hora válida
+    if(ChartXYToTimePrice(0, (int)lparam, (int)dparam, subwindow, time_from_click, price_from_click) && subwindow == 0)
+    {
+        // Normaliza para o início do dia
+        MqlDateTime dt;
+        TimeToStruct(time_from_click, dt);
+        dt.hour = 0; dt.min = 0; dt.sec = 0;
+        datetime clicked_day = StructToTime(dt);
+
+        ProcessFibonacci(clicked_day);
+        // ProcessStdDevChannel(clicked_day);
+    }
+    else
+    {
+        Print("Clique fora da janela principal do gráfico.");
+    }
+}
+
 //+------------------------------------------------------------------+
 //| Função de evento do gráfico                                      |
 //+------------------------------------------------------------------+
@@ -453,16 +451,23 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
     if(id == CHARTEVENT_KEYDOWN)
     {
         if((int)lparam == 16) g_shift_down = true;
+        if((int)lparam == 17) g_ctrl_down = true;
     }
     else if(id == CHARTEVENT_KEYUP)
     {
         if((int)lparam == 16) g_shift_down = false;
+        if((int)lparam == 17) g_ctrl_down = false;
     }
 
     // --- Lida com o evento de clique (Shift + Click) ---
     if(id == CHARTEVENT_CLICK && g_shift_down)
     {
-        HandleClickEvent(lparam, dparam);
+        HandleClickWayreChannel(lparam, dparam);
+    }
+    // --- Lida com o evento de clique (Ctrl + Click) ---
+    if(id == CHARTEVENT_CLICK && g_ctrl_down)
+    {
+        HandleClickFimathe(lparam, dparam);
     }
 }
 
@@ -490,30 +495,93 @@ int OnCalculate(const int rates_total,
 //+------------------------------------------------------------------+
 //| Calcula o range (max/min) dos 4 primeiros candles da sessão      |
 //+------------------------------------------------------------------+
-SessionRange CalculateSessionRange(datetime session_start)
+SessionRange getSessionRange(datetime selected_day)
 {
     SessionRange result;
-    result.max = -DBL_MAX;
-    result.min = DBL_MAX;
-    
-    MqlRates first_rates[];
-    // Copia 4 candles a partir do session_start
-    if(CopyRates(_Symbol, _Period, session_start, 4, first_rates) == 4)
+    result.max   = -DBL_MAX;
+    result.min   =  DBL_MAX;
+    result.range =  0.0;
+    result.valid =  false;
+
+    string symbol = _Symbol;
+    datetime session_start, session_end;
+
+    // 1. Obter horários da sessão
+    if(!GetSessionTimesForDay(symbol, selected_day, session_start, session_end))
     {
-        result.max = first_rates[0].high;
-        result.min = first_rates[0].low;
-        for(int k=0; k<4; k++)
-        {
-            if(first_rates[k].high > result.max) result.max = first_rates[k].high;
-            if(first_rates[k].low < result.min) result.min = first_rates[k].low;
-        }
+        Print("CalculateSessionRange: Falha ao obter horário da sessão.");
+        return result;
+    }
+
+    // 2. Timeframe baseado no dia da semana
+    MqlDateTime dt;
+    TimeToStruct(selected_day, dt);
+
+    string weekdays[] = {"Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado"};
+    
+
+    ENUM_TIMEFRAMES timeframe;
+    if(dt.day_of_week == MONDAY)
+    {
+        timeframe = PERIOD_M15;
+        Print("Dia da semana: ", weekdays[dt.day_of_week], " - Timeframe: ", timeframe);
     }
     else
     {
-        Print("CalculateSessionRange: Falha ao copiar os 4 primeiros candles.");
+        timeframe = PERIOD_M5;
+        Print("Dia da semana: ", weekdays[dt.day_of_week], " - Timeframe: ", timeframe);
     }
+
+    // 3. Encontrar índice do candle que contém o session_start
+    int start_pos = iBarShift(symbol, timeframe, session_start, false);
+
+    if(start_pos < 0)
+    {
+        Print("CalculateSessionRange: Nenhum candle contendo a sessão encontrada.");
+        return result;
+    }
+
+    // 4. Checar se existem 4 candles completos a partir deste índice
+    int total_bars = Bars(symbol, timeframe);
+
+    int available = total_bars - start_pos;
+
+    if(available < 4)
+    {
+        Print("CalculateSessionRange: Ainda não existem 4 candles da sessão. Formados: ", available);
+        return result;
+    }
+
+    // 5. Copiar os 4 primeiros candles da sessão
+    MqlRates first_rates[];
+    ArrayResize(first_rates, 4);
+
+    int copied = CopyRates(symbol, timeframe, start_pos, 4, first_rates);
+
+    if(copied != 4)
+    {
+        Print("CalculateSessionRange: Falha ao copiar os 4 candles (copiados: ", copied, ")");
+        return result;
+    }
+
+    // 6. Calcular range dos 4 candles
+    result.max = -DBL_MAX;
+    result.min =  DBL_MAX;
+
+    for(int i = 0; i < 4; i++)
+    {
+        if(first_rates[i].high > result.max) result.max = first_rates[i].high;
+        if(first_rates[i].low  < result.min) result.min = first_rates[i].low;
+    }
+    result.first_candle_start = first_rates[0].time;
+    result.first_candle_end   = first_rates[3].time;
+
+    result.range = result.max - result.min;
+    result.valid = true;
+
     return result;
 }
+
 
 //+------------------------------------------------------------------+
 //| Verifica se a maioria dos candles (70%) está dentro do range     |
@@ -609,7 +677,7 @@ datetime GetZigZagPivot(datetime datetime_base, int lookback=50)
     PivotData found_pivots[];
 
     // --- Calcula o range dos 4 primeiros candles do dia ---
-    SessionRange range_4candles_day = CalculateSessionRange(session_start);
+    SessionRange range_4candles_day = getSessionRange(session_start);
     double range_max = range_4candles_day.max;
     double range_min = range_4candles_day.min;
     // range_max = range_max + (range_max * 0.05);
@@ -702,11 +770,11 @@ datetime GetZigZagPivot(datetime datetime_base, int lookback=50)
     }
     
     // Imprime todos os pivôs encontrados
-    for(int i = 0; i < total_pivots; i++)
-    {
-        Print("Pivô [", i, "] encontrado em: ", TimeToString(found_pivots[i].time, TIME_DATE|TIME_MINUTES), 
-              " Inside: ", found_pivots[i].isInside);
-    }
+    // for(int i = 0; i < total_pivots; i++)
+    // {
+    //     Print("Pivô [", i, "] encontrado em: ", TimeToString(found_pivots[i].time, TIME_DATE|TIME_MINUTES), 
+    //           " Inside: ", found_pivots[i].isInside);
+    // }
     
     return return_datetime ? return_datetime : found_pivots[total_pivots-1].time; // Retorna o datetime do último pivot encontrado
 }
