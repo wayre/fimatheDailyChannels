@@ -42,7 +42,6 @@ struct SessionRange
 {
     double max;
     double min;
-    bool is_valid;
 };
 
 //--- Variáveis globais
@@ -67,7 +66,7 @@ int OnInit()
     g_drawn_days.Clear();
 
     // Inicializa o ZigZag com os parâmetros 12, 5, 3
-    g_zigzag_handle = iCustom(_Symbol, _Period, "Examples\\ZigZag", 6, 5, 4);
+    g_zigzag_handle = iCustom(_Symbol, PERIOD_M15, "Examples\\ZigZag", 1, 4, 1);
     if (g_zigzag_handle == INVALID_HANDLE)
     {
         Print("Erro ao criar handle do ZigZag");
@@ -236,7 +235,7 @@ void DrawDayFibonacci(const FiboData &data, const datetime for_day)
     TimeToStruct(for_day, dt);
     dt.hour = 1; dt.min = 0; dt.sec = 0;
     datetime time1 = StructToTime(dt);
-    dt.hour = 23; dt.min = 0; dt.sec = 0;
+    dt.hour = 9; dt.min = 0; dt.sec = 0;
     datetime time2 = StructToTime(dt);
 
     // Cria ou move o objeto Fibonacci
@@ -385,8 +384,7 @@ void ProcessStdDevChannel(datetime clicked_day)
         int period_seconds = PeriodSeconds(_Period);
         fourth_candle_time = session_start + (3 * period_seconds); 
         
-        pivot = GetZigZagPivot(clicked_day, 60);
-        Print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ pivot = ", pivot);
+        pivot = GetZigZagPivot(clicked_day);
     }
     else
     {
@@ -497,7 +495,6 @@ SessionRange CalculateSessionRange(datetime session_start)
     SessionRange result;
     result.max = -DBL_MAX;
     result.min = DBL_MAX;
-    result.is_valid = false;
     
     MqlRates first_rates[];
     // Copia 4 candles a partir do session_start
@@ -510,7 +507,6 @@ SessionRange CalculateSessionRange(datetime session_start)
             if(first_rates[k].high > result.max) result.max = first_rates[k].high;
             if(first_rates[k].low < result.min) result.min = first_rates[k].low;
         }
-        result.is_valid = true;
     }
     else
     {
@@ -563,7 +559,7 @@ bool IsMajorityInside(datetime start_time, datetime end_time, double range_max, 
 //+------------------------------------------------------------------+
 //| Retorna o datetime do último pivô identificado pelo ZigZag        |
 //+------------------------------------------------------------------+
-datetime GetZigZagPivot(datetime datetime_base, int lookback=30)
+datetime GetZigZagPivot(datetime datetime_base, int lookback=50)
 {
     if (g_zigzag_handle == INVALID_HANDLE) return 0;
 
@@ -602,17 +598,7 @@ datetime GetZigZagPivot(datetime datetime_base, int lookback=30)
             return 0;
          }
     }
-        
-    // 4. Varre do mais recente (final do dia) para o mais antigo
-    
-    // --- Calcula o range dos 4 primeiros candles do dia ---
-    SessionRange range = CalculateSessionRange(session_start);
-    double range_max = range.max;
-    double range_min = range.min;
-    bool range_calculated = range.is_valid;
-
-    datetime found_pivots_times[]; // Array temporário para compatibilidade se necessário, mas vamos usar o struct
-    
+            
     // crie um struct contendo o datetime e o valor do pivô
     struct PivotData
     {
@@ -620,70 +606,94 @@ datetime GetZigZagPivot(datetime datetime_base, int lookback=30)
         double value;
         bool isInside;
     };
-    
     PivotData found_pivots[];
+
+    // --- Calcula o range dos 4 primeiros candles do dia ---
+    SessionRange range_4candles_day = CalculateSessionRange(session_start);
+    double range_max = range_4candles_day.max;
+    double range_min = range_4candles_day.min;
+    // range_max = range_max + (range_max * 0.05);
+    // range_min = range_min - (range_min * 0.05);
+
+    datetime return_datetime = 0;
     
+    // Loop para iterar sobre o buffer do ZigZag e encontrar pivôs
     for (int i = 0; i < lookback; i++)
     {
         // Se o valor for válido e diferente de 0 e diferente de EMPTY_VALUE, é um pivô
         if (zigzag_buffer[i] != 0 && zigzag_buffer[i] != EMPTY_VALUE)
         {
-            if(time[i] < datetime_base)
+            // ignora pivots do datetime_base, quero apenas pivots anteriores
+            if(time[i] >= datetime_base)
             {
-                int size = ArraySize(found_pivots);
-                ArrayResize(found_pivots, size + 1);
-                found_pivots[size].time  = time[i];
-                found_pivots[size].value = zigzag_buffer[i];
-                found_pivots[size].isInside = false;
+                continue;
+            }
+
+            // Adiciona o pivô ao array de pivôs encontrados
+            int size = ArraySize(found_pivots);
+            ArrayResize(found_pivots, size + 1);
+            found_pivots[size].time  = time[i];
+            found_pivots[size].value = zigzag_buffer[i];
+            found_pivots[size].isInside = false;
+
+            //Apenas pivots do dia anterior ao datetime_base
+            Print("[", size, "]=> ", TimeToString(found_pivots[size].time, TIME_DATE|TIME_MINUTES));
+            
+            // VERIFICA SE ESTÁ "INSIDE" (dentro do range dos 4 primeiros candles)
+            MqlRates pivo_rate[];
+            
+            // Copia os dados do candle do pivô
+            if(CopyRates(_Symbol, _Period, time[i], 1, pivo_rate) == 1)
+            {
+                double p_high = pivo_rate[0].high;
+                double p_low = pivo_rate[0].low;
+                double p_range = p_high - p_low;
                 
-                // Verifica se está "Inside"
-                if(range_calculated)
+                if(p_range > 0)
                 {
-                    MqlRates p_rate[];
-                    if(CopyRates(_Symbol, _Period, time[i], 1, p_rate) == 1)
+                    // Calcula a sobreposição entre o candle do pivô e o range da sessão
+                    double overlap_high = MathMin(p_high, range_max);
+                    double overlap_low = MathMax(p_low, range_min);
+                    
+                    // Se houver sobreposição
+                    if(overlap_high < overlap_low)
                     {
-                        double p_high = p_rate[0].high;
-                        double p_low = p_rate[0].low;
-                        double p_range = p_high - p_low;
-                        
-                        if(p_range > 0)
+                        Print("Pivô ", i, " não está Inside");
+                    }
+
+                    double overlap = overlap_high - overlap_low;
+                    // Se mais de 50% do candle do pivô estiver dentro do range
+                    if(overlap > 0.5 * p_range)
+                    {
+                        found_pivots[size].isInside = true;
+                    }
+                    else
+                    {
+                        // Se não estiver 50% dentro, verifica se a maioria (70%) dos candles 
+                        // desde o início da sessão até o pivô estão dentro do range
+                        if(IsMajorityInside(session_start, time[i], range_max, range_min, 0.85))
                         {
-                            double overlap_high = MathMin(p_high, range_max);
-                            double overlap_low = MathMax(p_low, range_min);
-                            
-                            if(overlap_high > overlap_low)
-                            {
-                                double overlap = overlap_high - overlap_low;
-                                if(overlap > 0.5 * p_range)
-                                {
-                                    found_pivots[size].isInside = true;
-                                }
-                                else
-                                {
-                                    // Verifica se 70% dos candles desde o inicio da sessao estao dentro
-                                    if(IsMajorityInside(session_start, time[i], range_max, range_min, 0.7))
-                                    {
-                                        found_pivots[size].isInside = true;
-                                        Print("Pivô ", size, " está Inside");
-                                    }
-                                    else
-                                    {
-                                        Print("Pivô ", size, " não está Inside");
-                                        break; // Interrompe a busca se não atender aos critérios
-                                    }
-                                }
-                            }
+                            found_pivots[size].isInside = true;
+                            Print("Pivô ", size, " está Inside (Critério da Maioria)");
+                        }
+                        else
+                        {
+                            Print("Pivô ", size, " não está Inside");
+
+                            // resultado do último pivot encontrado
+                            return_datetime = found_pivots[size-1].time;
+                            break; // Interrompe a busca se não atender aos critérios
                         }
                     }
                 }
             }
         }
     }
-    Print("Total de pivôs encontrados: ", ArraySize(found_pivots));
-    for(int i = 0; i < ArraySize(found_pivots); i++)
-    {
-        Print("Pivô ", i, ": Tempo=", TimeToString(found_pivots[i].time, TIME_DATE|TIME_SECONDS), ", Valor=", found_pivots[i].value, ", Inside=", found_pivots[i].isInside);
-    }
+    // Print("Total de pivôs encontrados: ", ArraySize(found_pivots));
+    // for(int i = 0; i < ArraySize(found_pivots); i++)
+    // {
+    //     Print("Pivô ", i, ": Tempo=", TimeToString(found_pivots[i].time, TIME_DATE|TIME_SECONDS), ", Valor=", found_pivots[i].value, ", Inside=", found_pivots[i].isInside);
+    // }
 
     int total_pivots = ArraySize(found_pivots);
     if(total_pivots <= 0)
@@ -692,23 +702,13 @@ datetime GetZigZagPivot(datetime datetime_base, int lookback=30)
     }
     
     // Imprime todos os pivôs encontrados
-    Print("Total de pivôs encontrados: ", total_pivots);
     for(int i = 0; i < total_pivots; i++)
     {
         Print("Pivô [", i, "] encontrado em: ", TimeToString(found_pivots[i].time, TIME_DATE|TIME_MINUTES), 
-              " Valor: ", found_pivots[i].value, " Inside: ", found_pivots[i].isInside);
+              " Inside: ", found_pivots[i].isInside);
     }
     
-    
-    if (total_pivots > 1)
-    {
-        return found_pivots[1].time; // Retorna o segundo pivot (indice 1)
-    }
-    else
-    {
-        return found_pivots[0].time; // Retorna o unico encontrado
-    }
-    
+    return return_datetime ? return_datetime : found_pivots[total_pivots-1].time; // Retorna o datetime do último pivot encontrado
 }
 
 //+------------------------------------------------------------------+
