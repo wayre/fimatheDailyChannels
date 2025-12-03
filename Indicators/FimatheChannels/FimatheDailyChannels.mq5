@@ -408,21 +408,16 @@ void ProcessStdDevChannel(datetime clicked_day)
         std_start = pivot;
         std_end = range_4candles_day.first_candle_end;
         datetime target = range_4candles_day.first_candle_start;
-        Print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> std_start", std_start);
-        Print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> std_end", std_end);
-        Print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> target", target);
+        Print(">>>>>>>>>>>>>>>>>>> target: ", TimeToString(target, TIME_DATE | TIME_MINUTES));
         
-        StdDevChannelValues values = DrawAndGetStdDevChannelValues(std_start, std_end, target, 1.62);
+        StdDevChannelValues stdDevChanel = DrawAndGetStdDevChannelValues(std_start, std_end, target, 1.62);
 
-        FiboData fibo_data = CalculateFiboDataFromChannel(clicked_day, values.lineUp, values.lineDown);
-        Print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> lineUp", values.lineUp);
-        Print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> lineDown", values.lineDown);
+        FiboData fibo_data = CalculateFiboDataFromChannel(clicked_day, stdDevChanel.lineUp, stdDevChanel.lineDown);
+        Print("@@@@@@@@@@@@ lineUp: ", stdDevChanel.lineUp);
+        Print("@@@@@@@@@@@@ lineDown: ", stdDevChanel.lineDown);
         
         Print("fibo_data.max_high", fibo_data.max_high);
         Print("fibo_data.min_low", fibo_data.min_low);
-        Print("fibo_data.range", fibo_data.range);
-        Print("fibo_data.session_start", fibo_data.session_start);
-        Print("fibo_data.session_end", fibo_data.session_end);
         if( fibo_data.is_valid)
         {
             DrawDayFibonacci(fibo_data, clicked_day);
@@ -856,31 +851,75 @@ StdDevChannelValues DrawAndGetStdDevChannelValues(datetime datetime_ini, datetim
     ObjectCreate(0, obj_name, OBJ_STDDEVCHANNEL, 0, datetime_ini, 0, datetime_end, 0);
 
     ObjectSetDouble(0, obj_name, OBJPROP_DEVIATION, deviation);
-    ObjectSetInteger(0, obj_name, OBJPROP_COLOR, clrBlue); // Cor padrão, pode ser parametrizada
+    ObjectSetInteger(0, obj_name, OBJPROP_COLOR, C'11,11,49'); // Cor padrão, pode ser parametrizada
     ObjectSetInteger(0, obj_name, OBJPROP_RAY, true);      // Estende o canal
 
     // Propriedades para tornar o objeto selecionável e editável
     ObjectSetInteger(0, obj_name, OBJPROP_SELECTABLE, true);
+    ObjectSetInteger(0, obj_name, OBJPROP_FILL, true); 
     ObjectSetInteger(0, obj_name, OBJPROP_SELECTED, true);
     ObjectSetInteger(0, obj_name, OBJPROP_HIDDEN, false);
     ObjectSetInteger(0, obj_name, OBJPROP_STATE, true);
     ObjectSetInteger(0, obj_name, OBJPROP_ZORDER, 0);
+    ObjectSetInteger(0, obj_name, OBJPROP_BACK, false); 
 
     // --- 2. Cálculo Matemático para garantir precisão e retorno imediato ---
-    // --- 2. Força a atualização do gráfico para garantir que o objeto foi processado ---
-    ChartRedraw();
-
-    // --- 3. Obtém os valores diretamente do objeto ---
-    // O canal de desvio padrão tem 3 linhas:
-    // 0: Linha central (Regressão Linear)
-    // 1: Linha Superior (Upper)
-    // 2: Linha Inferior (Lower)
+    // --- 2. Cálculo Matemático Manual (Restaurado e Corrigido) ---
+    // Precisamos dos dados de fechamento no intervalo [datetime_ini, datetime_end]
     
-    double val_up = ObjectGetValueByTime(0, obj_name, datetime_target, 1);
-    double val_down = ObjectGetValueByTime(0, obj_name, datetime_target, 2);
+    MqlRates rates[];
+    // Seleciona o timeframe atual
+    ENUM_TIMEFRAMES timeframe = Period();
     
-    result.lineUp = val_up;
-    result.lineDown = val_down;
+    int copied = CopyRates(_Symbol, timeframe, datetime_ini, datetime_end, rates);
+    
+    if(copied > 1)
+    {
+        // Cálculo da Regressão Linear (Mínimos Quadrados)
+        // y = mx + c
+        // x é o índice (0 a N-1), y é o preço de fechamento
+        
+        double sum_x = 0, sum_y = 0, sum_xy = 0, sum_xx = 0;
+        int n = copied;
+        
+        for(int i = 0; i < n; i++)
+        {
+            double y = rates[i].close;
+            double x = (double)i; // Índice relativo ao início do array copiado
+            
+            sum_x += x;
+            sum_y += y;
+            sum_xy += (x * y);
+            sum_xx += (x * x);
+        }
+        
+        double m = (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x);
+        double c = (sum_y - m * sum_x) / n;
+        
+        // --- 3. Cálculo do Desvio Padrão ---
+        double sum_sq_residuals = 0;
+        for(int i = 0; i < n; i++)
+        {
+            double y = rates[i].close;
+            double x = (double)i;
+            double predicted = m * x + c;
+            sum_sq_residuals += MathPow(y - predicted, 2);
+        }
+        
+        double std_dev = MathSqrt(sum_sq_residuals / n);
+        
+        // --- 4. Projeção para o datetime_target ---
+        // Usamos Bars para contar quantas barras existem entre o inicio e o alvo,
+        // garantindo que gaps de mercado sejam contabilizados corretamente.
+        
+        int bars_diff = Bars(_Symbol, timeframe, rates[0].time, datetime_target);
+        double target_index = (double)(bars_diff - 1);
+        
+        double projected_price = m * target_index + c;
+        
+        result.lineUp = projected_price + (deviation * std_dev);
+        result.lineDown = projected_price - (deviation * std_dev);
+    }
     
     return result;
 }
