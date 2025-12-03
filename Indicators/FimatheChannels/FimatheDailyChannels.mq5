@@ -435,17 +435,16 @@ void ProcessStdDevChannel(datetime clicked_day)
 
     datetime pivot = 0;
     
-    SessionRange range_4candles_day = getInfoSession(clicked_day);
     pivot = GetZigZagPivot(clicked_day);
     
     if (pivot > 0)
     {
-        datetime time1, time2;
-        time1 = pivot;
-        time2 = range_4candles_day.last_candle;
-        datetime selected_date = range_4candles_day.first_candle;
+        datetime pivot_datetime;
+        pivot_datetime = pivot;
+        SessionRange range_4candles_day = getInfoSession(clicked_day);
+        datetime selected_date = range_4candles_day.last_candle;
         
-        StdDevChannelValues stdDevChanel = DrawAndGetStdDevChannelValues(time1, time2, selected_date, 1.62);
+        StdDevChannelValues stdDevChanel = DrawAndGetStdDevChannelValues(pivot_datetime, selected_date, 1.62);
 
         FiboData fibo_data = CalculateFiboDataFromChannel(clicked_day, stdDevChanel.lineUp, stdDevChanel.lineDown);
         
@@ -902,7 +901,7 @@ ENUM_TIMEFRAMES GetTimeframeByDay(datetime date_selected)
     MqlDateTime dt;
     TimeToStruct(date_selected, dt);
 
-    string weekdays[] = {"Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado"};
+    // string weekdays[] = {"Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado"};
     
     ENUM_TIMEFRAMES timeframe;
     timeframe = dt.day_of_week == MONDAY ? PERIOD_M15 : PERIOD_M5;
@@ -912,14 +911,11 @@ ENUM_TIMEFRAMES GetTimeframeByDay(datetime date_selected)
     return timeframe;
 }
 
-//+------------------------------------------------------------------+
-//| Desenha um Canal de Desvio Padrão e retorna os valores no target |
-//+------------------------------------------------------------------+
-StdDevChannelValues DrawAndGetStdDevChannelValues(datetime time1, datetime time2, datetime selected_date, double deviation=1.62)
+/**
+ * Desenha um Canal de Desvio Padrão
+*/
+void addObjStdDevChannel(string obj_name, datetime time1, datetime time2, double deviation=1.618)
 {
-    StdDevChannelValues result = {0.0, 0.0};
-    string obj_name = g_object_prefix + "StdDev_Channel";
-
     // --- 1. Cria ou atualiza o objeto gráfico ---
     if(ObjectFind(0, obj_name) >= 0)
     {
@@ -939,10 +935,85 @@ StdDevChannelValues DrawAndGetStdDevChannelValues(datetime time1, datetime time2
     ObjectSetInteger(0, obj_name, OBJPROP_HIDDEN, false);
     ObjectSetInteger(0, obj_name, OBJPROP_STATE, true);
     ObjectSetInteger(0, obj_name, OBJPROP_ZORDER, 0);
-    ObjectSetInteger(0, obj_name, OBJPROP_BACK, false); 
+    ObjectSetInteger(0, obj_name, OBJPROP_BACK, false);  
+}
 
-    // --- 2. Cálculo Matemático para garantir precisão e retorno imediato ---
-    // --- 2. Cálculo Matemático Manual (Restaurado e Corrigido) ---
+/**
+ * Imprime os níveis do canal de Desvio Padrão
+*/
+void PrintStdDevChannelLevels(string obj_name, datetime candle_time)
+{
+    if(ObjectFind(0, obj_name) < 0)
+    {
+        Print("ERRO: Objeto ", obj_name, " não encontrado!");
+        return;
+    }
+    
+    // Pega coordenadas base do canal
+    datetime time1 = (datetime)ObjectGetInteger(0, obj_name, OBJPROP_TIME, 0);
+    datetime time2 = (datetime)ObjectGetInteger(0, obj_name, OBJPROP_TIME, 1);
+    double   price1 = ObjectGetDouble(0, obj_name, OBJPROP_PRICE, 0);
+    double   price2 = ObjectGetDouble(0, obj_name, OBJPROP_PRICE, 1);
+    
+    // Número de níveis configurados
+    int levels = (int)ObjectGetInteger(0, obj_name, OBJPROP_LEVELS);
+    
+    Print("=== CANAL ", obj_name, " ===");
+    Print("Time1: ", TimeToString(time1), " Price1: ", price1);
+    Print("Time2: ", TimeToString(time2), " Price2: ", price2);
+    Print("Candle: ", TimeToString(candle_time));
+    
+    // Calcula linha central no candle
+    double delta_time = (double)(time2 - time1);
+    double delta_price = price2 - price1;
+    double slope = delta_price / delta_time;  // Inclinação
+    
+    double central_price = price1 + slope * (candle_time - time1);
+    
+    Print("Linha central no candle: ", NormalizeDouble(central_price, _Digits));
+    
+    // Para cada nível configurado
+    for(int i = 0; i < levels; i++)
+    {
+        double level_value = ObjectGetDouble(0, obj_name, OBJPROP_LEVELVALUE, i);
+        double deviation = ObjectGetDouble(0, obj_name, OBJPROP_DEVIATION);
+        
+        // Preço da linha = central + (desvio * nível)
+        double line_price = central_price + (deviation * level_value);
+        
+        string level_name = (level_value > 0) ? "+" + DoubleToString(level_value, 1) + "σ" 
+                                             : DoubleToString(level_value, 1) + "σ";
+        
+        Print("Nível ", level_name, ": ", NormalizeDouble(line_price, _Digits));
+        
+        // Identifica superior/inferior
+        if(level_value == 2.0 || level_value == 1.0)
+            Print("  ← LINHA SUPERIOR");
+        else if(level_value == -1.0 || level_value == -2.0)
+            Print("  ← LINHA INFERIOR");
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Desenha um Canal de Desvio Padrão e retorna os valores no target |
+//+------------------------------------------------------------------+
+StdDevChannelValues DrawAndGetStdDevChannelValues(datetime pivot_datetime, datetime selected_date, double deviation=1.618)
+{
+    StdDevChannelValues result = {0.0, 0.0};
+    datetime time1 = pivot_datetime;
+    string obj_name = g_object_prefix + "StdDev_Channel";
+
+    // --- Calcula o range dos 4 primeiros candles do dia ---
+    SessionRange info_session = getInfoSession(selected_date);
+    datetime time2 = info_session.last_candle;
+
+    // --- 1. Cria ou atualiza o objeto gráfico ---
+    addObjStdDevChannel(obj_name, time1, time2, deviation);
+
+    // --- 2. Imprime os níveis do canal ---
+    PrintStdDevChannelLevels(obj_name, selected_date);
+
+    // --- 2. Cálculo Matemático para garantir precisão e retorno imediato 
     // Precisamos dos dados de fechamento no intervalo [time1, time2]
     
     MqlRates rates[];
