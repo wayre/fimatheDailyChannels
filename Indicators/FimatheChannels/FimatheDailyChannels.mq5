@@ -20,6 +20,14 @@ input color InpLevelColor = C'66, 65, 65'; // Cor opcional para os níveis do Fi
 input ENUM_LINE_STYLE InpLineStyle = STYLE_SOLID;   // Estilo da Linha
 input int InpLevels = 20; // Número de níveis do Fibonacci
 
+//--- Estrutura para armazenar as coordenadas dos objetos
+struct ObjectCoords
+{
+    datetime time1, time2;
+    double   price1, price2;
+    string   obj_name;
+};
+
 //--- Estrutura para armazenar os dados do canal
 struct FiboData
 {
@@ -27,8 +35,8 @@ struct FiboData
     double min_low;
     double range;
     bool is_valid;
-    datetime session_start;
-    datetime session_end;
+    datetime time1;
+    datetime time2;
 };
 
 //--- Estrutura para retorno dos valores do canal de desvio padrão
@@ -50,6 +58,7 @@ struct SessionRange
 };
 
 //--- Variáveis globais
+ObjectCoords fibo_coords; // Variável global para salvar coords
 string g_object_prefix;            // Prefixo para os nomes dos objetos no gráfico
 string g_comment_robot = "";
 CArrayLong g_drawn_days;     // Armazena os dias para os quais os canais já foram desenhados
@@ -78,6 +87,11 @@ int OnInit()
         Print("Erro ao criar handle do ZigZag");
         return INIT_FAILED;
     }
+
+    // Habilita eventos do mouse e de criação/deleção de objetos
+    ChartSetInteger(0, CHART_EVENT_MOUSE_MOVE, true);
+    ChartSetInteger(0, CHART_EVENT_OBJECT_CREATE, true);
+    ChartSetInteger(0, CHART_EVENT_OBJECT_DELETE, true);
 
     return (INIT_SUCCEEDED);
 }
@@ -113,6 +127,7 @@ bool GetSessionTimesForDay(const string symbol, const datetime for_day, datetime
 
     if(SymbolInfoSessionTrade(symbol, (ENUM_DAY_OF_WEEK)dt.day_of_week, 0, trade_start_time, trade_end_time))
     {
+        /**
         if(trade_start_time > 0)
         {
             MqlDateTime dt_start, dt_end;
@@ -148,6 +163,14 @@ bool GetSessionTimesForDay(const string symbol, const datetime for_day, datetime
 
             return true;
         }
+        */
+        MqlDateTime dt;
+        TimeToStruct(for_day, dt);
+        dt.hour = 1; dt.min = 0; dt.sec = 0;
+        session_start = StructToTime(dt);
+        dt.hour = 23; dt.min = 55; dt.sec = 0;
+        session_end = StructToTime(dt);
+        return true;
     }
 
     return false;
@@ -172,10 +195,10 @@ FiboData CalculateFiboDataForDay(const datetime for_day)
 
     // Pega o range dos 4 primeiros candles
     result.range = range_4candles_day.range;
-    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-
+    
     
     // Ajusta o range para ser múltiplo de 1000 pontos
+    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
     if(point > 0 && result.range / point >= 1000)
     {
         result.range /= 2;
@@ -188,8 +211,8 @@ FiboData CalculateFiboDataForDay(const datetime for_day)
 
     result.max_high = max_high;
     result.min_low = min_low;
-    result.session_start = range_4candles_day.first_candle_start;
-    result.session_end = range_4candles_day.first_candle_end;
+    result.time1 = range_4candles_day.first_candle_start;
+    result.time2 = range_4candles_day.first_candle_end;
     result.is_valid = true;
 
     Print("CalculateFiboDataForDay: Cálculo para ", TimeToString(for_day, TIME_DATE), " concluído com sucesso.");
@@ -232,9 +255,19 @@ FiboData CalculateFiboDataFromChannel(datetime selected_day, double lineUp, doub
     result.min_low = MathMin(lineUp, lineDown);
     result.range = range;
     result.max_high = result.min_low + range;
+
+    g_comment_robot = "TAMANHO DO CANAL: " + DoubleToString(result.range/point,0);
+    Comment(g_comment_robot);
     
     // Preenche horários da sessão
-    GetSessionTimesForDay(_Symbol, selected_day, result.session_start, result.session_end);
+    datetime session_start = 0;
+    datetime session_end = 0;
+    GetSessionTimesForDay(_Symbol, selected_day, session_start, session_end);
+    Print("###################################### session_start: ", session_start, " session_end: ", session_end);
+    
+    SessionRange range_4candles_day = getSessionRange(selected_day);
+    result.time1 = range_4candles_day.first_candle_end;
+    result.time2 = session_end;
     
     result.is_valid = true;
     return result;
@@ -255,13 +288,13 @@ void DrawDayFibonacci(const FiboData &data, const datetime for_day)
     TimeToStruct(for_day, dt);
     dt.hour = 1; dt.min = 0; dt.sec = 0;
     datetime time1 = StructToTime(dt);
-    dt.hour = 23; dt.min = 59; dt.sec = 59;
+    dt.hour = 8; dt.min = 59; dt.sec = 59;
     datetime time2 = StructToTime(dt);
 
     // Cria ou move o objeto Fibonacci
     if(ObjectFind(0, obj_name) < 0)
     {
-        if(!ObjectCreate(0, obj_name, OBJ_FIBO, 0, time1, data.min_low, time2, data.max_high))
+        if(!ObjectCreate(0, obj_name, OBJ_FIBO, 0, data.time1, data.min_low, time2, data.max_high))
         {
             Print("Erro ao criar objeto Fibonacci: ", GetLastError());
             return;
@@ -320,6 +353,10 @@ void DrawDayFibonacci(const FiboData &data, const datetime for_day)
         string level_text = ""; 
         ObjectSetString(0, obj_name, OBJPROP_LEVELTEXT, level_index, level_text);
     }
+
+    // Pega as coordenadas do objeto e seta na variavel global
+    GetObjectCoords(obj_name, fibo_coords);
+    fibo_coords.obj_name = obj_name;
 }
 
 
@@ -352,7 +389,6 @@ void HandleMouseMoveEvent(const long &lparam, const double &dparam)
                 // Só imprime no log se o candle for diferente do último registrado
                 if(bar_time != last_logged_time)
                 {
-                    Print("Cursor sobre o candle de: ", TimeToString(bar_time, TIME_DATE | TIME_MINUTES));
                     last_logged_time = bar_time; // Atualiza o último candle registrado
                 }
                 return;
@@ -486,11 +522,14 @@ void HandleClickFimathe(long lparam, double dparam)
     }
 }
 
+
 //+------------------------------------------------------------------+
 //| Função de evento do gráfico                                      |
 //+------------------------------------------------------------------+
 void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
 {
+    // Debug global para verificar quais eventos estão chegando
+    // Print("Event: ", id, " lparam: ", lparam, " dparam: ", dparam, " sparam: ", sparam);
     // --- Lida com o movimento do mouse para logar a data ---
     if(id == CHARTEVENT_MOUSE_MOVE)
     {
@@ -520,6 +559,62 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
     {
         HandleClickFimathe(lparam, dparam);
     }
+
+    if(id == CHARTEVENT_OBJECT_CHANGE || id == CHARTEVENT_OBJECT_DRAG)
+    {
+        if(fibo_coords.obj_name == "") return;
+        
+        // Verifica se o objeto alterado é o nosso Fibonacci
+        if(sparam == fibo_coords.obj_name)
+        {
+            if(ObjectChanged(fibo_coords.obj_name, fibo_coords))
+            {
+                g_comment_robot = "TAMANHO DO CANAL: " + DoubleToString((fibo_coords.price2 - fibo_coords.price1) / _Point, 0);
+                Comment(g_comment_robot);
+            }
+        }
+    }
+}
+
+/**
+ * Pega as coordenadas de um objeto
+ */
+void GetObjectCoords(string obj_name, ObjectCoords &coords)
+{
+    coords.time1  = (datetime)ObjectGetInteger(0, obj_name, OBJPROP_TIME,  0);
+    coords.time2  = (datetime)ObjectGetInteger(0, obj_name, OBJPROP_TIME,  1);
+    coords.price1 = ObjectGetDouble(0, obj_name, OBJPROP_PRICE, 0);
+    coords.price2 = ObjectGetDouble(0, obj_name, OBJPROP_PRICE, 1);
+}
+
+/**
+ * Verifica se um objeto foi Alterado
+ */
+bool ObjectChanged(string obj_name, ObjectCoords &old_coords)
+{
+    // Pega coordenadas atuais do objeto
+    ObjectCoords current_coords;
+    GetObjectCoords(obj_name, current_coords);
+    
+    // Compara com as antigas
+    if(current_coords.time1  != old_coords.time1  || 
+       current_coords.time2  != old_coords.time2  ||
+       current_coords.price1 != old_coords.price1 ||
+       current_coords.price2 != old_coords.price2)
+    {
+        g_comment_robot = "TAMANHO DO CANAL: " + IntegerToString((int)(current_coords.price2 - current_coords.price1));
+        Comment(g_comment_robot);
+        
+        // Atualiza coords salvas
+        old_coords.time1  = current_coords.time1;
+        old_coords.time2  = current_coords.time2;
+        old_coords.price1 = current_coords.price1;
+        old_coords.price2 = current_coords.price2;
+        
+        return true; // Mudou!
+    }
+    
+    return false; // Sem alteração
 }
 
 //+------------------------------------------------------------------+
