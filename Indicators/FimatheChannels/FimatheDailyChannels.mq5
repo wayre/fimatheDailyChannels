@@ -45,9 +45,15 @@ struct StdDevChannelValues
     double lineUp;
     double lineDown;
 };
+struct CanalStdDev {
+    double central;
+    double superior;
+    double inferior;
+    double desvio_padrao;
+};
 
 //--- Estrutura para retorno do range da sessão
-struct SessionRange
+struct SessionRangeFimathe
 {
     double max;
     double min;
@@ -186,7 +192,7 @@ FiboData CalculateFiboDataForDay(const datetime for_day)
 
     string symbol = Symbol();
 
-    SessionRange range_4candles_day = getInfoSession(for_day);
+    SessionRangeFimathe range_4candles_day = getInfoSessionFimathe(for_day);
     if (!range_4candles_day.valid) return result;   
 
     // Pega o maior high e o menor low dos 4 primeiros candles
@@ -194,7 +200,8 @@ FiboData CalculateFiboDataForDay(const datetime for_day)
     double min_low = range_4candles_day.min;
 
     // Pega o range dos 4 primeiros candles
-    result.range = range_4candles_day.range;
+    result.range = range_4candles_day.range * SymbolInfoDouble(symbol, SYMBOL_POINT);
+    Print("Range: ", result.range);
     
     
     // Ajusta o range para ser múltiplo de 1000 pontos
@@ -265,8 +272,8 @@ FiboData CalculateFiboDataFromChannel(datetime selected_day, double lineUp, doub
     datetime session_end = 0;
     GetSessionTimesForDay(_Symbol, selected_day, session_start, session_end);
     
-    SessionRange range_4candles_day = getInfoSession(selected_day);
-    result.time1 = range_4candles_day.last_candle;
+    SessionRangeFimathe range_4candles_day = getInfoSessionFimathe(selected_day);
+    result.time1 = range_4candles_day.first_candle;
     result.time2 = session_end;
     
     result.is_valid = true;
@@ -276,9 +283,9 @@ FiboData CalculateFiboDataFromChannel(datetime selected_day, double lineUp, doub
 //+------------------------------------------------------------------+
 //| Desenha o objeto Fibonacci para um dia                           |
 //+------------------------------------------------------------------+
-void DrawDayFibonacci(const FiboData &data, const datetime for_day)
+void DrawDayFibonacci(const FiboData &fibo_data, const datetime for_day)
 {
-    if(!data.is_valid) return;
+    if(!fibo_data.is_valid) return;
 
     string day_str = TimeToString(for_day, TIME_DATE);
     string obj_name = g_object_prefix + "Fibo";
@@ -286,15 +293,39 @@ void DrawDayFibonacci(const FiboData &data, const datetime for_day)
     // Define o tempo de início e fim para o objeto Fibonacci
     MqlDateTime dt;
     TimeToStruct(for_day, dt);
+    datetime time2 =0;
+
     dt.hour = 1; dt.min = 0; dt.sec = 0;
     datetime time1 = StructToTime(dt);
-    dt.hour = 8; dt.min = 59; dt.sec = 59;
-    datetime time2 = StructToTime(dt);
+    
+
+    datetime current_time = TimeTradeServer();
+    TimeToStruct(current_time, dt);
+    dt.hour = 1; dt.min = 0; dt.sec = 0;
+    current_time = StructToTime(dt);
+    
+    TimeToStruct(for_day, dt);
+    
+    // checar se for_day é a data de hoje
+    if(for_day >= current_time)
+    {
+        dt.hour = 9; dt.min = 0; dt.sec = 0;
+        time2 = StructToTime(dt);
+        
+        //pega o ultimo datetime do candle
+        datetime last_candle = TimeCurrent();
+        time2 = time2 > last_candle ? time2 : last_candle;
+    }else {
+        //get last candle
+        dt.hour = 23; dt.min = 55; dt.sec = 0;
+        time2 = StructToTime(dt);
+    }
+    
 
     // Cria ou move o objeto Fibonacci
     if(ObjectFind(0, obj_name) < 0)
     {
-        if(!ObjectCreate(0, obj_name, OBJ_FIBO, 0, data.time1, data.min_low, time2, data.max_high))
+        if(!ObjectCreate(0, obj_name, OBJ_FIBO, 0, fibo_data.time1, fibo_data.min_low, time2, fibo_data.max_high))
         {
             Print("Erro ao criar objeto Fibonacci: ", GetLastError());
             return;
@@ -302,8 +333,8 @@ void DrawDayFibonacci(const FiboData &data, const datetime for_day)
     }
     else
     {
-        ObjectMove(0, obj_name, 0, time1, data.min_low);
-        ObjectMove(0, obj_name, 1, time2, data.max_high);
+        ObjectMove(0, obj_name, 0, time1, fibo_data.min_low);
+        ObjectMove(0, obj_name, 1, time2, fibo_data.max_high);
     }
 
     // Define as propriedades do objeto
@@ -397,7 +428,6 @@ void HandleMouseMoveEvent(const long &lparam, const double &dparam)
     }
 }
 
-
 //+------------------------------------------------------------------+
 //| Processa e desenha o Fibonacci para o dia clicado                |
 //+------------------------------------------------------------------+
@@ -433,20 +463,27 @@ void ProcessStdDevChannel(datetime clicked_day)
     ObjectsDeleteAll(0, g_object_prefix);
     g_drawn_days.Clear();
 
-    datetime pivot = 0;
-    
-    pivot = GetZigZagPivot(clicked_day);
-    
-    if (pivot > 0)
+    datetime pivot_datetime = GetZigZagPivot(clicked_day);
+    if (pivot_datetime > 0)
     {
-        datetime pivot_datetime;
-        pivot_datetime = pivot;
-        SessionRange range_4candles_day = getInfoSession(clicked_day);
+        SessionRangeFimathe range_4candles_day = getInfoSessionFimathe(clicked_day);
+        datetime time2 = range_4candles_day.last_candle;
         datetime selected_date = range_4candles_day.last_candle;
         
-        StdDevChannelValues stdDevChanel = DrawAndGetStdDevChannelValues(pivot_datetime, selected_date, 1.62);
+        // Desenha Canal de Desvio Padrão
+        string obj_name = g_object_prefix + "StdDev_Channel";
+        double deviation = 1.618;
+        addObjStdDevChannel(obj_name, pivot_datetime, time2, deviation);
+        
+        // --- 3. Calcula o canal de desvio padrão para selected_date ---
+        CanalStdDev canal = CalcularCanalStdDev(pivot_datetime, time2, selected_date, deviation);
+        
+        Print("WWWWWWWWWWWWWWWWWWWWW-Pivot datetime: ", pivot_datetime);
+        Print("Selected datetime: ", selected_date);
+        Print("Linha superior: ", canal.superior);
+        Print("Linha inferior: ", canal.inferior);
 
-        FiboData fibo_data = CalculateFiboDataFromChannel(clicked_day, stdDevChanel.lineUp, stdDevChanel.lineDown);
+        FiboData fibo_data = CalculateFiboDataFromChannel(clicked_day, canal.superior, canal.inferior);
         
         if( fibo_data.is_valid)
         {
@@ -515,7 +552,6 @@ void HandleClickFimathe(long lparam, double dparam)
         Print("Clique fora da janela principal do gráfico.");
     }
 }
-
 
 //+------------------------------------------------------------------+
 //| Função de evento do gráfico                                      |
@@ -635,9 +671,9 @@ int OnCalculate(const int rates_total,
 //+------------------------------------------------------------------+
 //| Calcula o range (max/min) dos 4 primeiros candles da sessão      |
 //+------------------------------------------------------------------+
-SessionRange getInfoSession(datetime selected_day)
+SessionRangeFimathe getInfoSessionFimathe(datetime selected_day)
 {
-    SessionRange result;
+    SessionRangeFimathe result;
     result.max   = -DBL_MAX;
     result.min   =  DBL_MAX;
     result.range =  0.0;
@@ -649,7 +685,7 @@ SessionRange getInfoSession(datetime selected_day)
     // 1. Obter horários da sessão
     if(!GetSessionTimesForDay(symbol, selected_day, session_start, session_end))
     {
-        Print("CalculateSessionRange: Falha ao obter horário da sessão.");
+        Print("CalculateSessionRangeFimathe: Falha ao obter horário da sessão.");
         return result;
     }
 
@@ -665,7 +701,7 @@ SessionRange getInfoSession(datetime selected_day)
 
     if(copied < 4)
     {
-        Print("CalculateSessionRange: Falha ao copiar candles suficientes (copiados: ", copied, "). Mínimo necessário: 4.");
+        Print("CalculateSessionRangeFimathe: Falha ao copiar candles suficientes (copiados: ", copied, "). Mínimo necessário: 4.");
         return result;
     }
 
@@ -788,7 +824,7 @@ datetime GetZigZagPivot(datetime datetime_base, int lookback=50)
     PivotData found_pivots[];
 
     // --- Calcula o range dos 4 primeiros candles do dia ---
-    SessionRange range_4candles_day = getInfoSession(session_start);
+    SessionRangeFimathe range_4candles_day = getInfoSessionFimathe(session_start);
     double range_max = range_4candles_day.max;
     double range_min = range_4candles_day.min;
     // range_max = range_max + (range_max * 0.05);
@@ -912,6 +948,86 @@ ENUM_TIMEFRAMES GetTimeframeByDay(datetime date_selected)
 }
 
 /**
+ * Calcula o canal de Desvio Padrão
+ */
+CanalStdDev CalcularCanalStdDev(datetime time1, datetime time2, datetime target_time, double multiplicador = 1.618)
+{
+    CanalStdDev resultado = {0,0,0,0};
+    
+    if (time2 <= time1 || target_time < time1 || target_time > time2)
+    {
+        Print("Intervalo ou target_time inválidos");
+        return resultado;
+    }
+
+    MqlRates rates[];
+    ArraySetAsSeries(rates, true);
+    int copied = CopyRates(_Symbol, PERIOD_M5, time1, time2, rates);
+    if(copied <= 0)
+    {
+        Print("Erro na cópia de barras: ", GetLastError());
+        return resultado;
+    }
+
+    // Arrays para regressão: x=índice, y=preço
+    double x[], y[];
+    ArrayResize(x, copied);
+    ArrayResize(y, copied);
+
+    for(int i = copied - 1; i >= 0; i--)
+    {
+        x[copied - 1 - i] = double(copied - 1 - i);
+        y[copied - 1 - i] = rates[i].close;
+    }
+
+    // Regressão linear
+    double sum_x = 0, sum_y = 0, sum_xy = 0, sum_x2 = 0;
+    for(int i = 0; i < copied; i++)
+    {
+        sum_x += x[i];
+        sum_y += y[i];
+        sum_xy += x[i]*y[i];
+        sum_x2 += x[i]*x[i];
+    }
+    
+    double mean_x = sum_x / copied;
+    double mean_y = sum_y / copied;
+    double b = (sum_xy - copied*mean_x*mean_y) / (sum_x2 - copied*mean_x*mean_x);
+    double a = mean_y - b*mean_x;
+
+    // Índice do target_time
+    int target_index = -1;
+    for(int i = 0; i < copied; i++)
+    {
+        if(rates[copied - 1 - i].time == target_time)
+        {
+            target_index = i;
+            break;
+        }
+    }
+    if(target_index == -1) return resultado;
+
+    // Valor central da regressão
+    resultado.central = a + b*double(target_index);
+
+    // Calcular resíduos e desvio padrão dos preços em relação à regressão
+    double sum_residuos2 = 0;
+    for(int i = 0; i < copied; i++)
+    {
+        double predicted = a + b*x[i];
+        double residuo = y[i] - predicted;
+        sum_residuos2 += residuo * residuo;
+    }
+    resultado.desvio_padrao = MathSqrt(sum_residuos2 / copied);
+
+    // Bandas superior e inferior
+    resultado.superior = resultado.central + (multiplicador * resultado.desvio_padrao);
+    resultado.inferior = resultado.central - (multiplicador * resultado.desvio_padrao);
+
+    return resultado;
+}
+
+/**
  * Desenha um Canal de Desvio Padrão
 */
 void addObjStdDevChannel(string obj_name, datetime time1, datetime time2, double deviation=1.618)
@@ -925,7 +1041,7 @@ void addObjStdDevChannel(string obj_name, datetime time1, datetime time2, double
     ObjectCreate(0, obj_name, OBJ_STDDEVCHANNEL, 0, time1, 0, time2, 0);
 
     ObjectSetDouble(0, obj_name, OBJPROP_DEVIATION, deviation);
-    ObjectSetInteger(0, obj_name, OBJPROP_COLOR, C'11,11,49'); // Cor padrão, pode ser parametrizada
+    ObjectSetInteger(0, obj_name, OBJPROP_COLOR, C'29,29,128'); // Cor padrão, pode ser parametrizada
     ObjectSetInteger(0, obj_name, OBJPROP_RAY, true);      // Estende o canal
 
     // Propriedades para tornar o objeto selecionável e editável
@@ -936,145 +1052,5 @@ void addObjStdDevChannel(string obj_name, datetime time1, datetime time2, double
     ObjectSetInteger(0, obj_name, OBJPROP_STATE, true);
     ObjectSetInteger(0, obj_name, OBJPROP_ZORDER, 0);
     ObjectSetInteger(0, obj_name, OBJPROP_BACK, false);  
-}
-
-/**
- * Imprime os níveis do canal de Desvio Padrão
-*/
-void PrintStdDevChannelLevels(string obj_name, datetime candle_time)
-{
-    if(ObjectFind(0, obj_name) < 0)
-    {
-        Print("ERRO: Objeto ", obj_name, " não encontrado!");
-        return;
-    }
-    
-    // Pega coordenadas base do canal
-    datetime time1 = (datetime)ObjectGetInteger(0, obj_name, OBJPROP_TIME, 0);
-    datetime time2 = (datetime)ObjectGetInteger(0, obj_name, OBJPROP_TIME, 1);
-    double   price1 = ObjectGetDouble(0, obj_name, OBJPROP_PRICE, 0);
-    double   price2 = ObjectGetDouble(0, obj_name, OBJPROP_PRICE, 1);
-    
-    // Número de níveis configurados
-    int levels = (int)ObjectGetInteger(0, obj_name, OBJPROP_LEVELS);
-    
-    Print("=== CANAL ", obj_name, " ===");
-    Print("Time1: ", TimeToString(time1), " Price1: ", price1);
-    Print("Time2: ", TimeToString(time2), " Price2: ", price2);
-    Print("Candle: ", TimeToString(candle_time));
-    
-    // Calcula linha central no candle
-    double delta_time = (double)(time2 - time1);
-    double delta_price = price2 - price1;
-    double slope = delta_price / delta_time;  // Inclinação
-    
-    double central_price = price1 + slope * (candle_time - time1);
-    
-    Print("Linha central no candle: ", NormalizeDouble(central_price, _Digits));
-    
-    // Para cada nível configurado
-    for(int i = 0; i < levels; i++)
-    {
-        double level_value = ObjectGetDouble(0, obj_name, OBJPROP_LEVELVALUE, i);
-        double deviation = ObjectGetDouble(0, obj_name, OBJPROP_DEVIATION);
-        
-        // Preço da linha = central + (desvio * nível)
-        double line_price = central_price + (deviation * level_value);
-        
-        string level_name = (level_value > 0) ? "+" + DoubleToString(level_value, 1) + "σ" 
-                                             : DoubleToString(level_value, 1) + "σ";
-        
-        Print("Nível ", level_name, ": ", NormalizeDouble(line_price, _Digits));
-        
-        // Identifica superior/inferior
-        if(level_value == 2.0 || level_value == 1.0)
-            Print("  ← LINHA SUPERIOR");
-        else if(level_value == -1.0 || level_value == -2.0)
-            Print("  ← LINHA INFERIOR");
-    }
-}
-
-//+------------------------------------------------------------------+
-//| Desenha um Canal de Desvio Padrão e retorna os valores no target |
-//+------------------------------------------------------------------+
-StdDevChannelValues DrawAndGetStdDevChannelValues(datetime pivot_datetime, datetime selected_date, double deviation=1.618)
-{
-    StdDevChannelValues result = {0.0, 0.0};
-    datetime time1 = pivot_datetime;
-    string obj_name = g_object_prefix + "StdDev_Channel";
-
-    // --- Calcula o range dos 4 primeiros candles do dia ---
-    SessionRange info_session = getInfoSession(selected_date);
-    datetime time2 = info_session.last_candle;
-
-    // --- 1. Cria ou atualiza o objeto gráfico ---
-    addObjStdDevChannel(obj_name, time1, time2, deviation);
-
-    // --- 2. Imprime os níveis do canal ---
-    PrintStdDevChannelLevels(obj_name, selected_date);
-
-    // --- 2. Cálculo Matemático para garantir precisão e retorno imediato 
-    // Precisamos dos dados de fechamento no intervalo [time1, time2]
-    
-    MqlRates rates[];
-    // Seleciona o timeframe atual
-    // ENUM_TIMEFRAMES timeframe = Period();
-
-    // Pega o timeframe baseado no dia da semana
-    ENUM_TIMEFRAMES timeframe = GetTimeframeByDay(selected_date);
-
-    // Copia os dados de fechamento para o array rates
-    int copied = CopyRates(_Symbol, timeframe, time1, time2, rates);
-    
-    if(copied > 1)
-    {
-        // Cálculo da Regressão Linear (Mínimos Quadrados)
-        // y = mx + c
-        // x é o índice (0 a N-1), y é o preço de fechamento
-        
-        double sum_x = 0, sum_y = 0, sum_xy = 0, sum_xx = 0;
-        int n = copied;
-        
-        for(int i = 0; i < n; i++)
-        {
-            double y = rates[i].close;
-            double x = (double)i; // Índice relativo ao início do array copiado
-            
-            sum_x += x;
-            sum_y += y;
-            sum_xy += (x * y);
-            sum_xx += (x * x);
-        }
-        
-        double m = (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x);
-        double c = (sum_y - m * sum_x) / n;
-        
-        // --- 3. Cálculo do Desvio Padrão ---
-        double sum_sq_residuals = 0;
-        for(int i = 0; i < n; i++)
-        {
-            double y = rates[i].close;
-            double x = (double)i;
-            double predicted = m * x + c;
-            sum_sq_residuals += MathPow(y - predicted, 2);
-        }
-        
-        double std_dev = MathSqrt(sum_sq_residuals / n);
-        
-        // --- 4. Projeção para o selected_date ---
-        // Usamos Bars para contar quantas barras existem entre o inicio e o alvo,
-        // garantindo que gaps de mercado sejam contabilizados corretamente.
-        
-        int bars_diff = Bars(_Symbol, timeframe, rates[0].time, selected_date);
-        double target_index = (double)(bars_diff - 1);
-        
-        double projected_price = m * target_index + c;
-        
-        result.lineUp = projected_price + (deviation * std_dev);
-        result.lineDown = projected_price - (deviation * std_dev);
-        Print("@@@@@@@@@@@@@@ lineUp: ", result.lineUp, " - lineDown: ", result.lineDown);
-    }
-    
-    return result;
 }
 
