@@ -79,12 +79,56 @@ int g_zigzag_handle = INVALID_HANDLE;
 #define LAST_TYPE_FIBO   1
 #define LAST_TYPE_STDDEV 2
 
-//--- Helper functions prototypes
-void SaveState(int type, datetime date);
-void ClearState();
-void ProcessFibonacci(datetime clicked_day);
-void ProcessStdDevChannel(datetime clicked_day);
+//--- Helper functions prototypes (Forward declarations abolished in favor of Struct)
+bool ProcessFibonacci(datetime clicked_day);
+bool ProcessStdDevChannel(datetime clicked_day);
 
+//--- Globals for delayed restoration
+int g_restore_type = LAST_TYPE_NONE;
+datetime g_restore_date = 0;
+int g_restore_attempts = 0;
+
+//--- Struct to handle Session State
+struct SessionState
+{
+    static void Save(int type, datetime date)
+    {
+        string key = GetKey();
+        // Pack data: Integer part = Date, Decimal part = Type/10
+        double packed = (double)date + ((double)type / 10.0);
+        
+        // Use GlobalVariableTemp to avoid disk I/O (memory only persistence)
+        if(!GlobalVariableCheck(key)) GlobalVariableTemp(key); 
+        GlobalVariableSet(key, packed);
+    }
+    
+    static void Load(int &type, datetime &date)
+    {
+        string key = GetKey();
+        if(!GlobalVariableCheck(key)) 
+        {
+            type = LAST_TYPE_NONE;
+            date = 0;
+            return;
+        }
+        
+        double packed = GlobalVariableGet(key);
+        date = (datetime)MathFloor(packed);
+        // Extract type from decimal: (value - floor) * 10
+        type = (int)MathRound((packed - MathFloor(packed)) * 10.0);
+    }
+    
+    static void Clear()
+    {
+        string key = GetKey();
+        if(GlobalVariableCheck(key)) GlobalVariableDel(key);
+    }
+    
+    static string GetKey()
+    {
+        return "Fimathe_State_" + IntegerToString(ChartID());
+    }
+};
 
 //+------------------------------------------------------------------+
 //| Função de inicialização do indicador                             |
@@ -105,24 +149,13 @@ int OnInit()
     }
     
     //--- Check for saved state (Timeframe change recalculation)
-    string type_key = "Fimathe_Type_" + IntegerToString(ChartID());
-    string date_key = "Fimathe_Date_" + IntegerToString(ChartID());
+    // Defer processing to OnCalculate to ensure data is ready 
+    SessionState::Load(g_restore_type, g_restore_date);
+    g_restore_attempts = 0;
     
-    if(GlobalVariableCheck(type_key) && GlobalVariableCheck(date_key))
+    if(g_restore_type != LAST_TYPE_NONE && g_restore_date > 0)
     {
-        int last_type = (int)GlobalVariableGet(type_key);
-        datetime last_date = (datetime)GlobalVariableGet(date_key);
-        
-        Print("OnInit: State found - Type: ", last_type, " Date: ", TimeToString(last_date));
-        
-        if(last_type == LAST_TYPE_FIBO)
-        {
-             ProcessFibonacci(last_date);
-        }
-        else if(last_type == LAST_TYPE_STDDEV)
-        {
-             ProcessStdDevChannel(last_date);
-        }
+        Print("OnInit: State found - Type: ", g_restore_type, " Date: ", TimeToString(g_restore_date), ". Queuing for restore.");
     }
 
     // Habilita eventos do mouse e de criação/deleção de objetos
@@ -143,7 +176,7 @@ void OnDeinit(const int reason)
     // Only clear state if NOT changing chart (timeframe/symbol)
     if(reason != REASON_CHARTCHANGE)
     {
-        ClearState();
+        SessionState::Clear();
     }
 
     //--- Limpa o comentário do gráfico
@@ -443,10 +476,10 @@ void HandleMouseMoveEvent(const long &lparam, const double &dparam)
 //+------------------------------------------------------------------+
 //| Processa e desenha o Fibonacci para o dia clicado                |
 //+------------------------------------------------------------------+
-void ProcessFibonacci(datetime clicked_day)
+bool ProcessFibonacci(datetime clicked_day)
 {
     // Save state for persistence
-    SaveState(LAST_TYPE_FIBO, clicked_day);
+    SessionState::Save(LAST_TYPE_FIBO, clicked_day);
 
     // Limpa objetos antigos e desenha o novo
     ObjectsDeleteAll(0, g_object_prefix);
@@ -458,24 +491,26 @@ void ProcessFibonacci(datetime clicked_day)
         DrawDayFibonacci(data, clicked_day);
         g_drawn_days.Add(clicked_day);
         ChartRedraw();
+        return true;
     }
     else
     {
-        Print("Falha ao calcular os dados do canal para o dia clicado.");
+        Print("ProcessFibonacci: Falha ao calcular dados. (Talvez dados ainda não carregados?)");
+        return false;
     }
 }
 
 //+------------------------------------------------------------------+
 //| Processa e desenha o Canal de Desvio Padrão                      |
 //+------------------------------------------------------------------+
-void ProcessStdDevChannel(datetime clicked_day)
+bool ProcessStdDevChannel(datetime clicked_day)
 {
     // --- Lógica do Canal de Desvio Padrão ---
     // 1. Identificar o ultimo candle pivô com a funcao GetZigZagPivot.
     //    Regra: "pivo da ultima perna do dia anterior até o fechamento do 4 candle do timeframe atual do clicked_day"
     
     // Save state for persistence
-    SaveState(LAST_TYPE_STDDEV, clicked_day);
+    SessionState::Save(LAST_TYPE_STDDEV, clicked_day);
     
     // Limpa objetos antigos e desenha o novo
     ObjectsDeleteAll(0, g_object_prefix);
@@ -486,6 +521,9 @@ void ProcessStdDevChannel(datetime clicked_day)
     if (pivot_datetime > 0)
     {
         SessionRangeFimathe range_4candles_day = getInfoSessionFimathe(clicked_day);
+        
+        if(!range_4candles_day.valid) return false;
+
         datetime time2 = range_4candles_day.last_candle;
         datetime selected_date = range_4candles_day.last_candle;
         
@@ -502,15 +540,18 @@ void ProcessStdDevChannel(datetime clicked_day)
             DrawDayFibonacci(fibo_data, clicked_day);
             g_drawn_days.Add(clicked_day);
             ChartRedraw();
+            return true;
         }
         else
         {
-            Print("Falha ao calcular os dados do canal para o dia clicado.");
+            Print("ProcessStdDevChannel: Falha ao calcular dados. (Fibo data invalid)");
+            return false;
         }
     }   
     else
     {
-        Print("Nenhum pivô encontrado para o cálculo do StdDev Channel.");
+        Print("ProcessStdDevChannel: Nenhum pivô encontrado para o cálculo do StdDev Channel.");
+        return false;
     }
 }
 
@@ -673,8 +714,42 @@ int OnCalculate(const int rates_total,
                 const long &volume[],
                 const int &spread[])
 {
-    // A lógica de desenho agora é tratada exclusivamente pelo OnChartEvent (clique).
-    // OnCalculate não precisa mais processar os dias visíveis.
+    // A lógica de desenho é tratada pelo OnChartEvent (clique).
+    
+    // Check for restoration queue
+    if(g_restore_type != LAST_TYPE_NONE && g_restore_date > 0)
+    {
+        g_restore_attempts++;
+        bool success = false;
+        
+        // Attempt to restore
+        if(g_restore_type == LAST_TYPE_FIBO)
+        {
+             success = ProcessFibonacci(g_restore_date);
+        }
+        else if(g_restore_type == LAST_TYPE_STDDEV)
+        {
+             success = ProcessStdDevChannel(g_restore_date);
+        }
+        
+        if(success)
+        {
+            Print("OnCalculate: Restoration successful after ", g_restore_attempts, " attempts.");
+            g_restore_type = LAST_TYPE_NONE; // Clear queue
+            g_restore_date = 0;
+        }
+        else
+        {
+             // If failed, we keep trying in next ticks up to a limit
+             if(g_restore_attempts > 50) // Give it some time (approx 50 ticks)
+             {
+                 Print("OnCalculate: Failed to restore state after ", g_restore_attempts, " attempts. Giving up.");
+                 g_restore_type = LAST_TYPE_NONE;
+                 g_restore_date = 0;
+             }
+        }
+    }
+
     return (rates_total);
 }
 //+------------------------------------------------------------------+
@@ -807,7 +882,10 @@ datetime GetDatetimeChecked(const datetime selected_datetime, int lookback = 200
     // Cópia em massa para performance
     if(CopyBuffer(g_zigzag_handle, 0, selected_datetime, lookback, zigzag_buffer) <= 0 ||
        CopyTime(_Symbol, period, selected_datetime, lookback, time_buffer) <= 0)
+    {
+        // Print("GetDatetimeChecked: Erro ao copiar buffer ZigZag. Error: ", GetLastError());
         return 0;
+    }
 
     struct ZigPoint { double val; datetime time; };
     ZigPoint points[];
@@ -1055,7 +1133,7 @@ ENUM_TIMEFRAMES GetTimeframeByDay(datetime date_selected)
 /**
  * Calcula o canal de Desvio Padrão
  */
-CanalStdDev CalcularCanalStdDev(datetime time1, datetime time2, datetime target_time, double mult = 1.5)
+CanalStdDev CalcularCanalStdDev(datetime time1, datetime time2, datetime target_time, double mult = 1.4)
 {
     CanalStdDev res = {0,0,0,0};
     string symbol = _Symbol;
@@ -1109,7 +1187,7 @@ CanalStdDev CalcularCanalStdDev(datetime time1, datetime time2, datetime target_
 /**
  * Desenha um Canal de Desvio Padrão
 */
-void addObjStdDevChannel(string obj_name, datetime time1, datetime time2, double deviation=1.5)
+void addObjStdDevChannel(string obj_name, datetime time1, datetime time2, double deviation=1.4)
 {
     // --- 1. Cria ou atualiza o objeto gráfico ---
     if(ObjectFind(0, obj_name) >= 0)
@@ -1134,29 +1212,5 @@ void addObjStdDevChannel(string obj_name, datetime time1, datetime time2, double
     ObjectSetInteger(0, obj_name, OBJPROP_ZORDER, 0);
     ObjectSetInteger(0, obj_name, OBJPROP_BACK, false);  
     ObjectSetInteger(0, obj_name, OBJPROP_RAY_RIGHT, false); // Garante a extensão à direita
-}
-
-//+------------------------------------------------------------------+
-//| Save indicator state to GlobalVariables                          |
-//+------------------------------------------------------------------+
-void SaveState(int type, datetime date)
-{
-    string type_key = "Fimathe_Type_" + IntegerToString(ChartID());
-    string date_key = "Fimathe_Date_" + IntegerToString(ChartID());
-    
-    GlobalVariableSet(type_key, (double)type);
-    GlobalVariableSet(date_key, (double)date);
-}
-
-//+------------------------------------------------------------------+
-//| Clear indicator state from GlobalVariables                       |
-//+------------------------------------------------------------------+
-void ClearState()
-{
-    string type_key = "Fimathe_Type_" + IntegerToString(ChartID());
-    string date_key = "Fimathe_Date_" + IntegerToString(ChartID());
-    
-    if(GlobalVariableCheck(type_key)) GlobalVariableDel(type_key);
-    if(GlobalVariableCheck(date_key)) GlobalVariableDel(date_key);
 }
 
