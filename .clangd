@@ -1,0 +1,6 @@
+# Impede que o clangd analise arquivos MQL5 e gere erros de compilação
+If:
+  PathMatch: .*\.mq[45h]
+
+Diagnostics:
+  Suppress: ["*"]
