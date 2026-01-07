@@ -74,6 +74,16 @@ bool g_shift_down = false;
 bool g_ctrl_down = false;
 int g_zigzag_handle = INVALID_HANDLE;
 
+//--- Constants for state persistence
+#define LAST_TYPE_NONE   0
+#define LAST_TYPE_FIBO   1
+#define LAST_TYPE_STDDEV 2
+
+//--- Helper functions prototypes
+void SaveState(int type, datetime date);
+void ClearState();
+void ProcessFibonacci(datetime clicked_day);
+void ProcessStdDevChannel(datetime clicked_day);
 
 
 //+------------------------------------------------------------------+
@@ -93,6 +103,27 @@ int OnInit()
         Print("Erro ao criar handle do ZigZag");
         return INIT_FAILED;
     }
+    
+    //--- Check for saved state (Timeframe change recalculation)
+    string type_key = "Fimathe_Type_" + IntegerToString(ChartID());
+    string date_key = "Fimathe_Date_" + IntegerToString(ChartID());
+    
+    if(GlobalVariableCheck(type_key) && GlobalVariableCheck(date_key))
+    {
+        int last_type = (int)GlobalVariableGet(type_key);
+        datetime last_date = (datetime)GlobalVariableGet(date_key);
+        
+        Print("OnInit: State found - Type: ", last_type, " Date: ", TimeToString(last_date));
+        
+        if(last_type == LAST_TYPE_FIBO)
+        {
+             ProcessFibonacci(last_date);
+        }
+        else if(last_type == LAST_TYPE_STDDEV)
+        {
+             ProcessStdDevChannel(last_date);
+        }
+    }
 
     // Habilita eventos do mouse e de criação/deleção de objetos
     ChartSetInteger(0, CHART_EVENT_MOUSE_MOVE, true);
@@ -108,6 +139,13 @@ int OnInit()
 void OnDeinit(const int reason)
 {
     Print("OnDeinit: FimatheDailyChannels desinicializando. Razão: ", reason);
+    
+    // Only clear state if NOT changing chart (timeframe/symbol)
+    if(reason != REASON_CHARTCHANGE)
+    {
+        ClearState();
+    }
+
     //--- Limpa o comentário do gráfico
     Comment("");
     //--- Remove todos os objetos criados pelo indicador
@@ -407,6 +445,9 @@ void HandleMouseMoveEvent(const long &lparam, const double &dparam)
 //+------------------------------------------------------------------+
 void ProcessFibonacci(datetime clicked_day)
 {
+    // Save state for persistence
+    SaveState(LAST_TYPE_FIBO, clicked_day);
+
     // Limpa objetos antigos e desenha o novo
     ObjectsDeleteAll(0, g_object_prefix);
     g_drawn_days.Clear();
@@ -432,6 +473,9 @@ void ProcessStdDevChannel(datetime clicked_day)
     // --- Lógica do Canal de Desvio Padrão ---
     // 1. Identificar o ultimo candle pivô com a funcao GetZigZagPivot.
     //    Regra: "pivo da ultima perna do dia anterior até o fechamento do 4 candle do timeframe atual do clicked_day"
+    
+    // Save state for persistence
+    SaveState(LAST_TYPE_STDDEV, clicked_day);
     
     // Limpa objetos antigos e desenha o novo
     ObjectsDeleteAll(0, g_object_prefix);
@@ -754,12 +798,15 @@ datetime GetDatetimeChecked(const datetime selected_datetime, int lookback = 200
 
     double zigzag_buffer[];
     datetime time_buffer[];
+    
+    ENUM_TIMEFRAMES period = PERIOD_M5;
+
     ArraySetAsSeries(zigzag_buffer, true);
     ArraySetAsSeries(time_buffer, true);
 
     // Cópia em massa para performance
     if(CopyBuffer(g_zigzag_handle, 0, selected_datetime, lookback, zigzag_buffer) <= 0 ||
-       CopyTime(_Symbol, _Period, selected_datetime, lookback, time_buffer) <= 0)
+       CopyTime(_Symbol, period, selected_datetime, lookback, time_buffer) <= 0)
         return 0;
 
     struct ZigPoint { double val; datetime time; };
@@ -1087,5 +1134,29 @@ void addObjStdDevChannel(string obj_name, datetime time1, datetime time2, double
     ObjectSetInteger(0, obj_name, OBJPROP_ZORDER, 0);
     ObjectSetInteger(0, obj_name, OBJPROP_BACK, false);  
     ObjectSetInteger(0, obj_name, OBJPROP_RAY_RIGHT, false); // Garante a extensão à direita
+}
+
+//+------------------------------------------------------------------+
+//| Save indicator state to GlobalVariables                          |
+//+------------------------------------------------------------------+
+void SaveState(int type, datetime date)
+{
+    string type_key = "Fimathe_Type_" + IntegerToString(ChartID());
+    string date_key = "Fimathe_Date_" + IntegerToString(ChartID());
+    
+    GlobalVariableSet(type_key, (double)type);
+    GlobalVariableSet(date_key, (double)date);
+}
+
+//+------------------------------------------------------------------+
+//| Clear indicator state from GlobalVariables                       |
+//+------------------------------------------------------------------+
+void ClearState()
+{
+    string type_key = "Fimathe_Type_" + IntegerToString(ChartID());
+    string date_key = "Fimathe_Date_" + IntegerToString(ChartID());
+    
+    if(GlobalVariableCheck(type_key)) GlobalVariableDel(type_key);
+    if(GlobalVariableCheck(date_key)) GlobalVariableDel(date_key);
 }
 
