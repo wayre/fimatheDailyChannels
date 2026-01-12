@@ -72,7 +72,8 @@ CArrayLong g_drawn_days;     // Armazena os dias para os quais os canais já for
 //--- Flags globais para o estado das teclas (compatível com Wine/Linux)
 bool g_shift_down = false;
 bool g_ctrl_down = false;
-int g_zigzag_handle = INVALID_HANDLE;
+int handle_slow = INVALID_HANDLE;
+int handle_fast = INVALID_HANDLE;
 
 //--- Constants for state persistence
 #define LAST_TYPE_NONE   0
@@ -141,13 +142,20 @@ int OnInit()
     g_drawn_days.Clear();
 
     // Inicializa o ZigZag com os parâmetros 12, 5, 3
-    g_zigzag_handle = iCustom(_Symbol, PERIOD_M5, "Examples\\ZigZag",4, 2, 2);
-    if (g_zigzag_handle == INVALID_HANDLE)
+    handle_slow = iCustom(_Symbol, PERIOD_M5, "Examples\\ZigZag",8, 4, 4);
+    if (handle_slow == INVALID_HANDLE)
     {
         Print("Erro ao criar handle do ZigZag");
         return INIT_FAILED;
     }
-    
+     // Inicializa o ZigZag com os parâmetros 12, 5, 3
+    handle_fast = iCustom(_Symbol, PERIOD_M5, "Examples\\ZigZag",3, 2, 2);
+    if (handle_slow == INVALID_HANDLE)
+    {
+        Print("Erro ao criar handle do ZigZag");
+        return INIT_FAILED;
+    }
+   
     //--- Check for saved state (Timeframe change recalculation)
     // Defer processing to OnCalculate to ensure data is ready 
     SessionState::Load(g_restore_type, g_restore_date);
@@ -185,9 +193,9 @@ void OnDeinit(const int reason)
     ObjectsDeleteAll(0, g_object_prefix);
     g_drawn_days.Clear();
     
-    if(g_zigzag_handle != INVALID_HANDLE)
+    if(handle_slow != INVALID_HANDLE)
     {
-        IndicatorRelease(g_zigzag_handle);
+        IndicatorRelease(handle_slow);
     }
 }
 
@@ -516,7 +524,7 @@ bool ProcessStdDevChannel(datetime clicked_day)
     ObjectsDeleteAll(0, g_object_prefix);
     g_drawn_days.Clear();
 
-    datetime pivot_datetime = GetDatetimeChecked(clicked_day);
+    datetime pivot_datetime = GetDualZigZagChampion(clicked_day);
 
     if (pivot_datetime > 0)
     {
@@ -863,13 +871,276 @@ bool IsMajorityInside(datetime start_time, datetime end_time, double range_max, 
     return ((double)inside_count / total) >= threshold_percent;
 }
 
+// --- Calcula Regressão Linear Simples (y = a + bx) ---
+// Retorna 'intercept' (nível inicial) e 'slope' (inclinação por barra)
+void CalculateLinearRegression(const double &y_values[], int count, double &intercept, double &slope)
+{
+   if(count < 2) { intercept=0; slope=0; return; }
 
-//+-----------------------------------------------------------------------------------------------------+
-//| Retorna o datetime de 'd' quando a sequência a,b,c,d em formato de pivot é encontrada alta ou baixa |
-//+-----------------------------------------------------------------------------------------------------+
+   double sum_x = 0, sum_y = 0, sum_xy = 0, sum_xx = 0;
+   
+   // x é sempre sequencial (0, 1, 2...) neste contexto de tempo
+   for(int i=0; i<count; i++) {
+      double x = (double)i;
+      double y = y_values[i];
+      
+      sum_x += x;
+      sum_y += y;
+      sum_xy += x * y;
+      sum_xx += x * x;
+   }
+   
+   double denominator = (count * sum_xx) - (sum_x * sum_x);
+   
+   if(denominator == 0.0) { intercept=0; slope=0; return; }
+   
+   slope = ((count * sum_xy) - (sum_x * sum_y)) / denominator;
+   intercept = (sum_y - (slope * sum_x)) / count;
+}
+
+// Calcula o Coeficiente de Correlação de Pearson (-1 a 1)
+double CalculatePearsonCorrelation(const double &x[], const double &y[], int count)
+{
+   if(count < 2) return 0.0;
+
+   double sum_x = 0, sum_y = 0;
+   // Calcula Médias
+   for(int i=0; i<count; i++) {
+      sum_x += x[i];
+      sum_y += y[i];
+   }
+   double mean_x = sum_x / count;
+   double mean_y = sum_y / count;
+
+   double num = 0.0;
+   double den_x = 0.0;
+   double den_y = 0.0;
+
+   // Calcula Numerador e Denominador
+   for(int i=0; i<count; i++) {
+      double dx = x[i] - mean_x;
+      double dy = y[i] - mean_y;
+      num += dx * dy;
+      den_x += dx * dx;
+      den_y += dy * dy;
+   }
+
+   if(den_x == 0 || den_y == 0) return 0.0;
+
+   return num / MathSqrt(den_x * den_y);
+}
+
+//+------------------------------------------------------------------+
+//| Função: GetDualZigZagChampion (Otimizada com CopyRates)          |
+//+------------------------------------------------------------------+
+datetime GetDualZigZagChampion(datetime selected_datetime, int lookback=200)
+{
+   // Estrutura interna para "limpar" os ZigZags (Sparse -> Dense)
+    struct ZigPoint {
+    double val;          // Valor do Preço
+    datetime time;       // Tempo
+    int rates_index;     // Índice no array MqlRates (para cálculo rápido)
+    };
+
+   // --- 1. AQUISIÇÃO DE DADOS (COPYRATES) ---
+   if(handle_slow == INVALID_HANDLE || handle_fast == INVALID_HANDLE) return 0;
+
+   MqlRates rates[];
+   double slow_buffer[], fast_buffer[];
+   
+   ArraySetAsSeries(rates, true);
+   ArraySetAsSeries(slow_buffer, true);
+   ArraySetAsSeries(fast_buffer, true);
+
+   // Copia tudo de uma vez para performance
+   if(CopyRates(_Symbol, _Period, selected_datetime, lookback, rates) <= 0 ||
+      CopyBuffer(handle_slow, 0, selected_datetime, lookback, slow_buffer) <= 0 ||
+      CopyBuffer(handle_fast, 0, selected_datetime, lookback, fast_buffer) <= 0)
+   {
+      return 0; // Falha na cópia
+   }
+
+   // --- 2. EXTRAÇÃO LIMPA (SPARSE -> DENSE) ---
+   // Cria listas apenas com os pivôs reais, descartando zeros
+   ZigPoint slow_points[];
+   ZigPoint fast_points[];
+   
+   int s_count = 0;
+   ArrayResize(slow_points, lookback);
+   for(int i = 0; i < lookback; i++) {
+      if(slow_buffer[i] != 0 && slow_buffer[i] != EMPTY_VALUE) {
+         slow_points[s_count].val = slow_buffer[i];
+         slow_points[s_count].time = rates[i].time;
+         slow_points[s_count].rates_index = i; // Guarda índice para cálculo linear
+         s_count++;
+      }
+   }
+   ArrayResize(slow_points, s_count);
+
+   int f_count = 0;
+   ArrayResize(fast_points, lookback);
+   for(int i = 0; i < lookback; i++) {
+      if(fast_buffer[i] != 0 && fast_buffer[i] != EMPTY_VALUE) {
+         fast_points[f_count].val = fast_buffer[i];
+         fast_points[f_count].time = rates[i].time;
+         fast_points[f_count].rates_index = i;
+         f_count++;
+      }
+   }
+   ArrayResize(fast_points, f_count);
+
+   // --- 3. DEFINIÇÃO DE CONSTANTES DA SESSÃO ---
+   SessionRangeFimathe session_info = getInfoSessionFimathe(selected_datetime);
+   datetime time2 = session_info.last_candle;
+   
+   // Encontrar o índice de time2 no array rates (aproximado)
+   int idx_time2 = 0;
+   for(int k=0; k<lookback; k++) {
+      if(rates[k].time <= time2) { idx_time2 = k; break; }
+   }
+
+   // Variáveis de Controle do Campeão
+   datetime best_datetime = 0;
+   double best_score = -999999.0;
+
+   // Arrays auxiliares para cálculo de regressão (reutilizáveis)
+   double x_reg[]; ArrayResize(x_reg, lookback);
+   double y_reg[]; ArrayResize(y_reg, lookback);
+
+   // --- 4. ITERAÇÃO MESTRA (CANDIDATOS ZIGZAG LENTO) ---
+   // Itera sobre cada pivô lento como possível início do canal (time1)
+   for(int i = 0; i < s_count; i++)
+   {
+      datetime time1 = slow_points[i].time;
+      if(time1 >= time2) continue; // Validação temporal básica
+
+      int idx_time1 = slow_points[i].rates_index;
+      
+      // A. OBTER DADOS DO CANAL DE REFERÊNCIA
+      // Chamamos a função externa para obter a largura e os pontos base
+      CanalStdDev canal = CalcularCanalStdDev(time1, time2, time1, 1.0);
+      
+      // Nota: CalcularCanalStdDev nos dá os valores no ponto time1 (target).
+      // Para pontuar outros pontos, precisamos da inclinação (slope) da reta.
+      // Vamos calcular a Regressão Linear deste segmento para poder projetar os valores.
+      
+      int data_count = idx_time1 - idx_time2 + 1;
+      if(data_count < 2) continue;
+
+      // Preenche arrays para regressão (Preços de Fechamento entre Time1 e Time2)
+      for(int k=0; k < data_count; k++) {
+         y_reg[k] = rates[idx_time1 - k].close; // Do passado para o futuro
+         x_reg[k] = (double)k;
+      }
+
+      double slope, intercept;
+      CalculateLinearRegression(y_reg, data_count, intercept, slope);
+      
+      // Largura do Canal (Baseada no calculo externo ou desvio padrão interno)
+      double largura_total = MathAbs(canal.superior - canal.inferior);
+      double semi_largura = largura_total / 2.0;
+      double tolerancia = largura_total * 0.15; // 15% de margem para considerar "próximo"
+
+      // B. LOOP DE PONTUAÇÃO (SCORING)
+      double current_score = 0;
+
+      // --- Validação Cruzada: Pivôs RÁPIDOS ---
+      for(int f = 0; f < f_count; f++)
+      {
+         // Ignora pivôs fora da janela temporal do canal analisado
+         if(fast_points[f].time < time1 || fast_points[f].time > time2) continue;
+
+         // Projeção Matemática: Qual seria o valor do Centro/Sup/Inf neste exato momento?
+         // Distância em barras do início (time1)
+         double delta_bars = (double)(idx_time1 - fast_points[f].rates_index);
+         
+         double proj_central = intercept + (slope * delta_bars);
+         double proj_sup = proj_central + semi_largura;
+         double proj_inf = proj_central - semi_largura;
+         double val = fast_points[f].val;
+
+         // Regras de Pontuação (Rápido)
+         bool is_inside = (val <= proj_sup && val >= proj_inf);
+         
+         if(is_inside)
+         {
+            // Bônus por proximidade das bordas (Superior ou Inferior)
+            if(MathAbs(val - proj_sup) < tolerancia || MathAbs(val - proj_inf) < tolerancia)
+               current_score += 1.5; // Peso Médio
+            
+            // Bônus por proximidade do centro (Regressão à média)
+            else if(MathAbs(val - proj_central) < tolerancia)
+               current_score += 0.5; // Peso Baixo
+         }
+         else
+         {
+            // PENALIDADE: Rompimento do canal
+            current_score -= 5.0; 
+         }
+      }
+
+      // --- Validação Mestra: Pivôs LENTOS ---
+      for(int s = 0; s < s_count; s++)
+      {
+         // Ignora pivôs fora da janela
+         if(slow_points[s].time < time1 || slow_points[s].time > time2) continue;
+
+         // Projeção Matemática
+         double delta_bars = (double)(idx_time1 - slow_points[s].rates_index);
+         
+         double proj_central = intercept + (slope * delta_bars);
+         double proj_sup = proj_central + semi_largura;
+         double proj_inf = proj_central - semi_largura;
+         double val = slow_points[s].val;
+
+         bool is_inside = (val <= proj_sup && val >= proj_inf);
+
+         if(is_inside)
+         {
+            // Bônus ALTO por proximidade das bordas (Pivô Lento na Borda = Estrutura Forte)
+            if(MathAbs(val - proj_sup) < tolerancia || MathAbs(val - proj_inf) < tolerancia)
+               current_score += 3.0; // Peso Alto (Prioridade)
+            
+            else if(MathAbs(val - proj_central) < tolerancia)
+               current_score += 1.0;
+         }
+         else
+         {
+            // PENALIDADE: Pivô Lento fora do canal invalida fortemente a estrutura
+            current_score -= 5.0;
+         }
+      }
+
+      // Adicional: Pearson Correlation como fator multiplicador de qualidade
+      // Canais muito erráticos (Pearson baixo) perdem valor no score final
+      double pearson = CalculatePearsonCorrelation(x_reg, y_reg, data_count);
+      current_score += (MathAbs(pearson) * 10.0); // Bônus de até 10 pontos pela linearidade
+
+      // C. RANKING
+      if(current_score > best_score)
+      {
+         best_score = current_score;
+         best_datetime = time1;
+      }
+   }
+
+   return best_datetime; // Retorna o início do melhor canal encontrado
+}
+
+//+------------------------------------------------------------------+
+//| Identifica um padrão de pivô "A-B-C-D" válido no ZigZag.         |
+//|                                                                  |
+//| Critérios de validação:                                          |
+//| 1. Estrutura de Alta (D < B e B > C) ou Baixa (D > B e B < C).   |
+//| 2. Retração (C) deve estar entre 20% e 80% do movimento A-D.     |
+//| 3. A perna C-D deve ser maior que a largura do Canal de Desvio   |
+//|    Padrão calculado (Expansão).                                  |
+//|                                                                  |
+//| Return: Datetime do ponto 'D' (início do movimento) se válido.   |
+//+------------------------------------------------------------------+
 datetime GetDatetimeChecked(const datetime selected_datetime, int lookback = 200)
 {
-    if(g_zigzag_handle == INVALID_HANDLE) return 0;
+    if(handle_slow == INVALID_HANDLE) return 0;
 
     double zigzag_buffer[];
     datetime time_buffer[];
@@ -880,14 +1151,18 @@ datetime GetDatetimeChecked(const datetime selected_datetime, int lookback = 200
     ArraySetAsSeries(time_buffer, true);
 
     // Cópia em massa para performance
-    if(CopyBuffer(g_zigzag_handle, 0, selected_datetime, lookback, zigzag_buffer) <= 0 ||
+    if(CopyBuffer(handle_slow, 0, selected_datetime, lookback, zigzag_buffer) <= 0 ||
        CopyTime(_Symbol, period, selected_datetime, lookback, time_buffer) <= 0)
     {
         // Print("GetDatetimeChecked: Erro ao copiar buffer ZigZag. Error: ", GetLastError());
         return 0;
     }
 
-    struct ZigPoint { double val; datetime time; };
+    struct ZigPoint {
+        double val;          // Valor do Preço
+        datetime time;       // Tempo
+        int original_index;  // Índice para acesso rápido ao Close
+    };
     ZigPoint points[];
     
     // Reserva memória antecipadamente para evitar realocações no loop
@@ -914,6 +1189,7 @@ datetime GetDatetimeChecked(const datetime selected_datetime, int lookback = 200
     // Começamos em 0 (mais recente) e olhamos para trás
     for(int i = 0; i <= total_points - 4; i++)
     {
+        Print(points[i].time);
         double a = points[i].val;
         double b = points[i+1].val;
         double c = points[i+2].val;
@@ -953,11 +1229,34 @@ datetime GetDatetimeChecked(const datetime selected_datetime, int lookback = 200
                     condition_met = true;
                 }
             }
+
+            // a distancia entre a perna "c" até d" deve ser 2 vezes maior que o canal de desvio padrão
+            if (condition_met)
+            {
+                SessionRangeFimathe range_4candles_day = getInfoSessionFimathe(selected_datetime);
+                datetime time2 = range_4candles_day.last_candle;
+                
+                // Calcula o canal de desvio padrão para selected_date ---
+                CanalStdDev canal = CalcularCanalStdDev(points[i+3].time, time2, points[i+3].time);
+                Print("Candle A: ", points[i].time, " time1: ", points[i+3].time, " time2: ", time2);
+                double dist_cd = MathAbs(c - d);
+                double distCanal = MathAbs(canal.superior - canal.inferior);
+
+                // Deve ser maior que o DOBRO da distCanal
+                bool is_expansion_valid = (dist_cd > distCanal);
+                
+                Print("dist_cd: ", dist_cd, " distCanal: ", distCanal);
+                
+                if (!is_expansion_valid)
+                {
+                    condition_met = false;
+                }
+            }
         }
 
         if(condition_met)
         {
-            return points[i+1].time; // Retorna o datetime de 'c'
+            return points[i+3].time; // Retorna o datetime de 'c'
         }
     }
 
@@ -965,11 +1264,21 @@ datetime GetDatetimeChecked(const datetime selected_datetime, int lookback = 200
 }
 
 //+------------------------------------------------------------------+
-//| Retorna o datetime do último pivô identificado pelo ZigZag        |
+//| Busca o último pivô do ZigZag que respeita a condição "Inside".  |
+//|                                                                  |
+//| Lógica:                                                          |
+//| 1. Analisa pivôs passados a partir de 'datetime_base'.           |
+//| 2. Valida se o pivô está dentro do Range dos 4 candles iniciais. |
+//| 3. Aprofunda no histórico (lookback) até encontrar um pivô que   |
+//|    esteja FORA do range.                                         |
+//| 4. Retorna o pivô imediatamente anterior ao que saiu do range    |
+//|    (ou seja, o pivô mais antigo que ainda é considerado Inside). |
+//|                                                                  |
+//| Return: Datetime do pivô encontrado ou 0.                        |
 //+------------------------------------------------------------------+
 datetime GetZigZagPivot(datetime datetime_base, int lookback=50)
 {
-    if (g_zigzag_handle == INVALID_HANDLE) return 0;
+    if (handle_slow == INVALID_HANDLE) return 0;
 
     // 1. Determinar o fim da sessão para o dia do datetime_base
     datetime session_start, session_end;
@@ -985,11 +1294,11 @@ datetime GetZigZagPivot(datetime datetime_base, int lookback=50)
     double zigzag_buffer[];
     ArraySetAsSeries(zigzag_buffer, true); // Garante que o índice 0 é o mais recente dos copiados
 
-    if (CopyBuffer(g_zigzag_handle, 0, session_start, lookback, zigzag_buffer) < lookback)
+    if (CopyBuffer(handle_slow, 0, session_start, lookback, zigzag_buffer) < lookback)
     {
         int available = Bars(_Symbol, _Period);
         if (available < lookback) lookback = available; // Ajusta lookback se não houver dados suficientes
-        if (CopyBuffer(g_zigzag_handle, 0, session_start, lookback, zigzag_buffer) <= 0)
+        if (CopyBuffer(handle_slow, 0, session_start, lookback, zigzag_buffer) <= 0)
         {
              Print("GetZigZagPivot: Erro ao copiar buffer do ZigZag a partir de session_start");
              return 0;
@@ -1111,8 +1420,11 @@ datetime GetZigZagPivot(datetime datetime_base, int lookback=50)
 }
 
 
-/**
-Pega o timeframe baseado no dia da semana */
+//+------------------------------------------------------------------+
+//| Determina o timeframe de análise com base no dia da semana       |
+//| da data fornecida.                                               |
+//| Também atualiza os comentários de debug no gráfico.              |
+//+------------------------------------------------------------------+
 ENUM_TIMEFRAMES GetTimeframeByDay(datetime date_selected)
 {
     MqlDateTime dt;
@@ -1133,11 +1445,11 @@ ENUM_TIMEFRAMES GetTimeframeByDay(datetime date_selected)
 /**
  * Calcula o canal de Desvio Padrão
  */
-CanalStdDev CalcularCanalStdDev(datetime time1, datetime time2, datetime target_time, double mult = 1.4)
+CanalStdDev CalcularCanalStdDev(datetime time1, datetime time2, datetime target_time, double mult = 1)
 {
     CanalStdDev res = {0,0,0,0};
     string symbol = _Symbol;
-    ENUM_TIMEFRAMES timeframe = _Period;
+    ENUM_TIMEFRAMES timeframe = PERIOD_M5;
 
     int idx1 = iBarShift(symbol, timeframe, time1);
     int idx2 = iBarShift(symbol, timeframe, time2);
@@ -1187,7 +1499,7 @@ CanalStdDev CalcularCanalStdDev(datetime time1, datetime time2, datetime target_
 /**
  * Desenha um Canal de Desvio Padrão
 */
-void addObjStdDevChannel(string obj_name, datetime time1, datetime time2, double deviation=1.4)
+void addObjStdDevChannel(string obj_name, datetime time1, datetime time2, double deviation=1)
 {
     // --- 1. Cria ou atualiza o objeto gráfico ---
     if(ObjectFind(0, obj_name) >= 0)
@@ -1213,4 +1525,3 @@ void addObjStdDevChannel(string obj_name, datetime time1, datetime time2, double
     ObjectSetInteger(0, obj_name, OBJPROP_BACK, false);  
     ObjectSetInteger(0, obj_name, OBJPROP_RAY_RIGHT, false); // Garante a extensão à direita
 }
-
